@@ -14,6 +14,7 @@ from core.controller import AppController
 from core.gpu_manager import GPUManager
 from core.preview_engine import PreviewEngine
 from ui.widgets.video_player_widget import VideoPlayerWidget
+from ui.widgets.timeline_editor import TimelineEditor
 
 
 class MainWindow(QMainWindow):
@@ -49,6 +50,9 @@ class MainWindow(QMainWindow):
 
         self.video_player = VideoPlayerWidget()
 
+        self.timeline_editor = TimelineEditor()
+        self.timeline_editor.set_project(self.controller.project)
+
         gpu = GPUManager.get_gpu_info()
 
         gpu_text = (
@@ -64,6 +68,7 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(top)
         layout.addWidget(self.video_player)
+        layout.addWidget(self.timeline_editor)
         layout.addWidget(self.gpu_label)
         layout.addWidget(self.remove_button)
 
@@ -113,6 +118,8 @@ class MainWindow(QMainWindow):
 
         if success:
             self.file_label.setText(filename)
+
+            self.timeline_editor.update()
 
     def video_loaded(self, info):
 

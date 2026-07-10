@@ -3,6 +3,7 @@ from PyQt6.QtCore import QThread
 from core.project import Project
 from core.video_engine import VideoEngine
 from core.processing_engine import ProcessingEngine
+from core.project_importer import ProjectImporter
 
 
 class AppController:
@@ -13,6 +14,9 @@ class AppController:
     """
 
     def __init__(self):
+        self.project = Project()
+        self.importer = ProjectImporter(self.project)
+
         self.video = VideoEngine()
 
         self.processing = ProcessingEngine()
@@ -44,7 +48,15 @@ class AppController:
     # -------------------------
 
     def open_video(self, filepath):
-        return self.video.load_video(filepath)
+
+        info = self.importer.import_video(filepath)
+
+        success = self.video.load_video(filepath)
+
+        if not success:
+            return False
+
+        return info
 
     def play(self):
         self.video.play()
@@ -64,8 +76,16 @@ class AppController:
     def seek(self, frame_index):
         self.video.seek(frame_index)
 
+
+
+    def selected_clip(self):
+        return self.project.timeline.get_selected_clip()
+
     def release(self):
         self.video.release()
 
         self._processing_thread.quit()
         self._processing_thread.wait()
+
+
+
