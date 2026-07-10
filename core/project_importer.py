@@ -1,4 +1,4 @@
-from uuid import uuid4
+﻿from uuid import uuid4
 
 from core.video_reader import VideoReader
 from core.asset import Asset
@@ -14,6 +14,8 @@ class ProjectImporter:
 
         reader = VideoReader(filepath)
         info = reader.get_info()
+        reader.release()  # fixed: was never released, leaked a
+                           # cv2.VideoCapture handle on every import
 
         asset = Asset(
             id=str(uuid4()),

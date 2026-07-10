@@ -1,4 +1,4 @@
-"""
+﻿"""
 TimelineWidget
 --------------
 Scrubbing timeline: slider (click-to-seek + drag-to-seek),
@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (
     QStyle,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from ui.widgets.timeline_clip import TimelineClip
 
 
 class ClickableSlider(QSlider):
@@ -53,8 +52,6 @@ class TimelineWidget(QWidget):
 
         self.total_frames = 0
         self.fps = 30.0
-
-        self.timeline_clips = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
@@ -131,4 +128,3 @@ class TimelineWidget(QWidget):
         seconds = int(total_seconds % 60)
         frames = int(frame_index % round(self.fps))
         return f"{hours:02}:{minutes:02}:{seconds:02}:{frames:02}"
-

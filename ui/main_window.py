@@ -91,6 +91,10 @@ class MainWindow(QMainWindow):
         self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
         self.video_player.frame_scrubbed.connect(self.controller.seek)
 
+        # Sprint 9: clicking the timeline ruler seeks the video,
+        # same controller.seek() the scrub bar already uses.
+        self.timeline_editor.seek_requested.connect(self.controller.seek)
+
         engine = self.controller.video
 
         engine.video_loaded.connect(self.video_loaded)
@@ -118,8 +122,7 @@ class MainWindow(QMainWindow):
 
         if success:
             self.file_label.setText(filename)
-
-            self.timeline_editor.update()
+            self.timeline_editor.refresh()
 
     def video_loaded(self, info):
 
@@ -131,6 +134,11 @@ class MainWindow(QMainWindow):
 
         self.video_player.set_controls_enabled(True)
         self.video_player.set_total_frames(info["Frames"], info["FPS"])
+
+        # Sprint 9: ruler labels/click-to-seek now use the real fps
+        # instead of a hardcoded 30.
+        self.timeline_editor.set_fps(info["FPS"])
+
         self.remove_button.setEnabled(True)
 
     def update_preview(self, frame):
@@ -138,18 +146,12 @@ class MainWindow(QMainWindow):
         pixmap = PreviewEngine.frame_to_pixmap(frame)
         self.video_player.load_frame(pixmap)
 
-        self.video_player.set_current_frame(
-            self.controller.video.current_frame_index
-        )
+        current_frame = self.controller.video.current_frame_index
+
+        self.video_player.set_current_frame(current_frame)
+        self.timeline_editor.set_playhead_frame(current_frame)
 
     def update_processed_frame(self, frame):
-        """
-        Receives frames from ProcessingEngine. The AI processor
-        returns RGBA (4-channel); the default PassthroughProcessor
-        (fallback if AI deps are missing) returns 3-channel BGR.
-        Handled locally here rather than modifying PreviewEngine,
-        since its current contents/usages elsewhere are unknown.
-        """
         pixmap = self._frame_to_pixmap(frame)
         self.video_player.set_processed_frame(pixmap)
 
