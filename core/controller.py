@@ -1,5 +1,6 @@
-﻿from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QThread
 
+from core.project import Project
 from core.video_engine import VideoEngine
 from core.processing_engine import ProcessingEngine
 
