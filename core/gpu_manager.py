@@ -1,4 +1,7 @@
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 
 class GPUManager:
@@ -6,15 +9,19 @@ class GPUManager:
     @staticmethod
     def get_gpu_info():
 
-        if torch.cuda.is_available():
+        if torch is None:
+            return {
+                "available": False,
+                "name": "PyTorch Not Installed"
+            }
 
+        if torch.cuda.is_available():
             return {
                 "available": True,
-                "name": torch.cuda.get_device_name(0),
-                "cuda": torch.version.cuda,
-                "count": torch.cuda.device_count()
+                "name": torch.cuda.get_device_name(0)
             }
 
         return {
-            "available": False
+            "available": False,
+            "name": "CUDA Not Available"
         }

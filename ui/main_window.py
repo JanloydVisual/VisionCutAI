@@ -1,20 +1,22 @@
-from PyQt6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QPushButton,
-    QLabel,
-    QVBoxLayout,
-    QHBoxLayout,
+﻿from PyQt6.QtWidgets import (
     QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from preview_engine import PreviewEngine
-from controller import AppController
 from config import APP_NAME
-from gpu_manager import GPUManager
+from core.controller import AppController
+from core.gpu_manager import GPUManager
+from core.preview_engine import PreviewEngine
+from ui.widgets.video_player_widget import VideoPlayerWidget
 
 
 class MainWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
 
@@ -23,84 +25,86 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
 
-        # =========================
-        # Main Layout
-        # =========================
+        self.build_ui()
+        self.connect_signals()
 
-        main_layout = QVBoxLayout()
+    # ----------------------------------------------------
+    # UI
+    # ----------------------------------------------------
 
-        # -------------------------
-        # Top Bar
-        # -------------------------
+    def build_ui(self):
+
+        layout = QVBoxLayout()
+
+        # ---------------- Top Bar ----------------
 
         self.file_label = QLabel("No video selected")
 
         self.browse_button = QPushButton("Browse")
         self.browse_button.clicked.connect(self.open_video)
 
-        top_layout = QHBoxLayout()
-        top_layout.addWidget(self.file_label)
-        top_layout.addStretch()
-        top_layout.addWidget(self.browse_button)
+        top = QHBoxLayout()
+        top.addWidget(self.file_label)
+        top.addStretch()
+        top.addWidget(self.browse_button)
 
-        # -------------------------
-        # Preview
-        # -------------------------
+        # ---------------- Video Player Widget ----------------
 
-        self.preview = QLabel("Video Preview")
-        self.preview.setMinimumHeight(500)
-        self.preview.setStyleSheet("""
-            QLabel{
-                border:2px solid #555;
-                font-size:22px;
-                color:white;
-                background:#222;
-            }
-        """)
-        self.preview.setAlignment(
-            __import__("PyQt6.QtCore").QtCore.Qt.AlignmentFlag.AlignCenter
-        )
+        self.video_player = VideoPlayerWidget()
 
-        # -------------------------
-        # GPU Information
-        # -------------------------
+        # ---------------- GPU ----------------
 
         gpu = GPUManager.get_gpu_info()
 
-        if gpu["available"]:
-            gpu_text = f"GPU : {gpu['name']}"
-        else:
-            gpu_text = "GPU : Not Available"
+        gpu_text = (
+            f"GPU : {gpu['name']}"
+            if gpu["available"]
+            else "GPU : Not Available"
+        )
 
         self.gpu_label = QLabel(gpu_text)
 
-        # -------------------------
-        # Status
-        # -------------------------
-
-        self.status = QLabel("Status : Ready")
-
-        # -------------------------
-        # Buttons
-        # -------------------------
+        # ---------------- Remove BG ----------------
 
         self.remove_button = QPushButton("Remove Background")
         self.remove_button.setEnabled(False)
 
-        # -------------------------
-        # Add Widgets
-        # -------------------------
+        # ---------------- Layout ----------------
 
-        main_layout.addLayout(top_layout)
-        main_layout.addWidget(self.preview)
-        main_layout.addWidget(self.gpu_label)
-        main_layout.addWidget(self.status)
-        main_layout.addWidget(self.remove_button)
+        layout.addLayout(top)
+        layout.addWidget(self.video_player)
+        layout.addWidget(self.gpu_label)
+        layout.addWidget(self.remove_button)
 
         container = QWidget()
-        container.setLayout(main_layout)
+        container.setLayout(layout)
 
         self.setCentralWidget(container)
+
+    # ----------------------------------------------------
+    # Signals
+    # ----------------------------------------------------
+
+    def connect_signals(self):
+
+        self.video_player.play_clicked.connect(self.controller.play)
+        self.video_player.pause_clicked.connect(self.controller.pause)
+        self.video_player.stop_clicked.connect(self.controller.stop)
+
+        # Timeline wiring (additive - required for scrubbing/stepping
+        # to actually reach the engine)
+        self.video_player.next_frame_clicked.connect(self.controller.next_frame)
+        self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
+        self.video_player.frame_scrubbed.connect(self.controller.seek)
+
+        engine = self.controller.video
+
+        engine.video_loaded.connect(self.video_loaded)
+        engine.frame_ready.connect(self.update_preview)
+
+    # ----------------------------------------------------
+    # Video
+    # ----------------------------------------------------
 
     def open_video(self):
 
@@ -114,14 +118,31 @@ class MainWindow(QMainWindow):
         if not filename:
             return
 
-        info = self.controller.open_video(filename)
+        success = self.controller.open_video(filename)
 
-        self.file_label.setText(filename)
+        if success:
+            self.file_label.setText(filename)
 
-        self.status.setText(
+    def video_loaded(self, info):
+
+        self.video_player.set_video_info(
             f"Loaded | "
             f"{info['Width']} x {info['Height']} | "
             f"{info['FPS']:.2f} FPS"
         )
 
+        self.video_player.set_controls_enabled(True)
+        self.video_player.set_total_frames(info["Frames"], info["FPS"])
         self.remove_button.setEnabled(True)
+
+    def update_preview(self, frame):
+
+        pixmap = PreviewEngine.frame_to_pixmap(frame)
+        self.video_player.load_frame(pixmap)
+
+        # Keep the timeline in sync with whatever frame is actually
+        # on screen, whether it arrived from playback, stepping,
+        # or scrubbing.
+        self.video_player.set_current_frame(
+            self.controller.video.current_frame_index
+        )
