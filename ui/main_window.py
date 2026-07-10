@@ -7,6 +7,7 @@
     QVBoxLayout,
     QWidget,
 )
+from PyQt6.QtGui import QImage, QPixmap
 
 from config import APP_NAME
 from core.controller import AppController
@@ -36,8 +37,6 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout()
 
-        # ---------------- Top Bar ----------------
-
         self.file_label = QLabel("No video selected")
 
         self.browse_button = QPushButton("Browse")
@@ -48,11 +47,7 @@ class MainWindow(QMainWindow):
         top.addStretch()
         top.addWidget(self.browse_button)
 
-        # ---------------- Video Player Widget ----------------
-
         self.video_player = VideoPlayerWidget()
-
-        # ---------------- GPU ----------------
 
         gpu = GPUManager.get_gpu_info()
 
@@ -64,12 +59,8 @@ class MainWindow(QMainWindow):
 
         self.gpu_label = QLabel(gpu_text)
 
-        # ---------------- Remove BG ----------------
-
         self.remove_button = QPushButton("Remove Background")
         self.remove_button.setEnabled(False)
-
-        # ---------------- Layout ----------------
 
         layout.addLayout(top)
         layout.addWidget(self.video_player)
@@ -91,8 +82,6 @@ class MainWindow(QMainWindow):
         self.video_player.pause_clicked.connect(self.controller.pause)
         self.video_player.stop_clicked.connect(self.controller.stop)
 
-        # Timeline wiring (additive - required for scrubbing/stepping
-        # to actually reach the engine)
         self.video_player.next_frame_clicked.connect(self.controller.next_frame)
         self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
         self.video_player.frame_scrubbed.connect(self.controller.seek)
@@ -101,6 +90,8 @@ class MainWindow(QMainWindow):
 
         engine.video_loaded.connect(self.video_loaded)
         engine.frame_ready.connect(self.update_preview)
+
+        self.controller.processing.frame_processed.connect(self.update_processed_frame)
 
     # ----------------------------------------------------
     # Video
@@ -140,9 +131,36 @@ class MainWindow(QMainWindow):
         pixmap = PreviewEngine.frame_to_pixmap(frame)
         self.video_player.load_frame(pixmap)
 
-        # Keep the timeline in sync with whatever frame is actually
-        # on screen, whether it arrived from playback, stepping,
-        # or scrubbing.
         self.video_player.set_current_frame(
             self.controller.video.current_frame_index
         )
+
+    def update_processed_frame(self, frame):
+        """
+        Receives frames from ProcessingEngine. The AI processor
+        returns RGBA (4-channel); the default PassthroughProcessor
+        (fallback if AI deps are missing) returns 3-channel BGR.
+        Handled locally here rather than modifying PreviewEngine,
+        since its current contents/usages elsewhere are unknown.
+        """
+        pixmap = self._frame_to_pixmap(frame)
+        self.video_player.set_processed_frame(pixmap)
+
+    @staticmethod
+    def _frame_to_pixmap(frame):
+        if frame.ndim == 3 and frame.shape[2] == 4:
+            h, w, _ = frame.shape
+            image = QImage(
+                frame.data, w, h, w * 4, QImage.Format.Format_RGBA8888
+            ).copy()
+            return QPixmap.fromImage(image)
+
+        return PreviewEngine.frame_to_pixmap(frame)
+
+    # ----------------------------------------------------
+    # Shutdown
+    # ----------------------------------------------------
+
+    def closeEvent(self, event):
+        self.controller.release()
+        super().closeEvent(event)

@@ -2,7 +2,7 @@
 VideoPlayerWidget
 ------------------
 Composes the center editing surface:
-    VideoPreview      (frame + overlay canvas)
+    VideoPreview      (zoom/pan viewer + overlay + comparison)
     PlaybackControls  (Play/Pause/Stop)
     TimelineWidget    (scrub bar, step buttons, position display)
 
@@ -63,6 +63,9 @@ class VideoPlayerWidget(QWidget):
     # ---------------- Public API ----------------
     def load_frame(self, pixmap: QPixmap) -> None:
         self.preview.load_frame(pixmap)
+
+    def set_processed_frame(self, pixmap: QPixmap) -> None:
+        self.preview.set_processed_frame(pixmap)
 
     def clear(self) -> None:
         self.preview.clear()

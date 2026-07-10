@@ -1,10 +1,11 @@
 ﻿"""
 VideoPreview
 ------------
-Owns the ViewerWidget (zoom/pan) and OverlayCanvas, stacked
-together, plus the ViewerControls bar beneath.
-Public API is unchanged from the QLabel-based version, so
-VideoPlayerWidget requires no modification.
+Owns the ViewerWidget (zoom/pan/comparison) and OverlayCanvas,
+stacked together, plus the ViewerControls bar beneath.
+Public API is unchanged from prior milestones; set_processed_frame
+is a new additive method forwarding to the already-existing
+ViewerWidget.set_processed_frame().
 """
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QStackedLayout, QSizePolicy
@@ -50,6 +51,9 @@ class VideoPreview(QWidget):
 
     def load_frame(self, pixmap: QPixmap) -> None:
         self.viewer.load_frame(pixmap)
+
+    def set_processed_frame(self, pixmap: QPixmap) -> None:
+        self.viewer.set_processed_frame(pixmap)
 
     def clear(self) -> None:
         self.viewer.clear()
