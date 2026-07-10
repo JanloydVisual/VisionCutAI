@@ -1,16 +1,13 @@
 ﻿"""
 TimelineWidget
 --------------
-Real scrubbing timeline: slider, Previous/Next frame buttons,
-frame counter, and timecode display.
+Scrubbing timeline: slider (click-to-seek + drag-to-seek),
+Previous/Next frame buttons, frame counter, and timecode display.
 
 Emits:
-    frame_scrubbed(int)      - live, fired while the user drags
+    frame_scrubbed(int)
     next_frame_clicked()
     previous_frame_clicked()
-
-Has NO knowledge of VideoEngine or Controller - purely UI,
-same as every other widget in this package.
 """
 
 from PyQt6.QtWidgets import (
@@ -20,8 +17,28 @@ from PyQt6.QtWidgets import (
     QSlider,
     QPushButton,
     QLabel,
+    QStyle,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+
+
+class ClickableSlider(QSlider):
+    """QSlider that jumps directly to the clicked position."""
+
+    clicked_value = pyqtSignal(int)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            value = QStyle.sliderValueFromPosition(
+                self.minimum(),
+                self.maximum(),
+                int(event.position().x()),
+                self.width(),
+            )
+            self.setValue(value)
+            self.clicked_value.emit(value)
+
+        super().mousePressEvent(event)
 
 
 class TimelineWidget(QWidget):
@@ -40,7 +57,6 @@ class TimelineWidget(QWidget):
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(4)
 
-        # ---------------- Slider row ----------------
         slider_row = QHBoxLayout()
 
         self.previous_button = QPushButton("\u25c0")
@@ -51,7 +67,7 @@ class TimelineWidget(QWidget):
         self.next_button.setFixedWidth(32)
         self.next_button.setToolTip("Next Frame")
 
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(0)
         self.slider.setValue(0)
@@ -62,7 +78,6 @@ class TimelineWidget(QWidget):
 
         root.addLayout(slider_row)
 
-        # ---------------- Info row ----------------
         info_row = QHBoxLayout()
 
         self.timecode_label = QLabel("00:00:00:00")
@@ -81,10 +96,9 @@ class TimelineWidget(QWidget):
             "background-color: #1e1e1e; border: 1px solid #333;"
         )
 
-        # sliderMoved fires only on user drag, never on programmatic
-        # setValue(). This is what prevents feedback loops when the
-        # slider position is updated from live playback.
         self.slider.sliderMoved.connect(self.frame_scrubbed.emit)
+        self.slider.clicked_value.connect(self.frame_scrubbed.emit)
+
         self.previous_button.clicked.connect(self.previous_frame_clicked.emit)
         self.next_button.clicked.connect(self.next_frame_clicked.emit)
 

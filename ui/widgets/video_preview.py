@@ -1,49 +1,58 @@
 ﻿"""
 VideoPreview
 ------------
-Owns the frame-rendering QLabel and the OverlayCanvas stacked on top.
-No playback logic, no controller access - purely visual.
+Owns the ViewerWidget (zoom/pan) and OverlayCanvas, stacked
+together, plus the ViewerControls bar beneath.
+Public API is unchanged from the QLabel-based version, so
+VideoPlayerWidget requires no modification.
 """
 
-from PyQt6.QtWidgets import QWidget, QLabel, QStackedLayout, QSizePolicy
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QStackedLayout, QSizePolicy
 from PyQt6.QtGui import QPixmap
 
 from ui.widgets.overlay_canvas import OverlayCanvas
+from ui.widgets.viewer_widget import ViewerWidget
+from ui.widgets.viewer_controls import ViewerControls
 
 
 class VideoPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._layout = QStackedLayout(self)
-        self._layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self.frame_label = QLabel("No video loaded")
-        self.frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.frame_label.setStyleSheet("background-color: black; color: #666;")
-        self.frame_label.setSizePolicy(
+        stack_container = QWidget()
+        self._stack_layout = QStackedLayout(stack_container)
+        self._stack_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+
+        self.viewer = ViewerWidget()
+        self.viewer.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        self.overlay = OverlayCanvas(self)
+        self.overlay = OverlayCanvas(stack_container)
 
-        self._layout.addWidget(self.frame_label)
-        self._layout.addWidget(self.overlay)
+        self._stack_layout.addWidget(self.viewer)
+        self._stack_layout.addWidget(self.overlay)
+
+        root.addWidget(stack_container, stretch=1)
+
+        self.controls = ViewerControls()
+        root.addWidget(self.controls)
+
+        self.controls.fit_clicked.connect(self.viewer.fit_to_window)
+        self.controls.zoom_100_clicked.connect(self.viewer.zoom_100)
+        self.controls.zoom_200_clicked.connect(self.viewer.zoom_200)
+        self.controls.reset_clicked.connect(self.viewer.reset_view)
+        self.viewer.zoom_changed.connect(self.controls.set_zoom_label)
 
     def load_frame(self, pixmap: QPixmap) -> None:
-        if pixmap is None or pixmap.isNull():
-            return
-        scaled = pixmap.scaled(
-            self.frame_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.frame_label.setPixmap(scaled)
+        self.viewer.load_frame(pixmap)
 
     def clear(self) -> None:
-        self.frame_label.clear()
-        self.frame_label.setText("No video loaded")
+        self.viewer.clear()
 
     def get_overlay(self) -> OverlayCanvas:
         return self.overlay
