@@ -1,4 +1,3 @@
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -9,8 +8,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
 )
 
-from controller import AppController
 from preview_engine import PreviewEngine
+from controller import AppController
 from config import APP_NAME
 from gpu_manager import GPUManager
 
@@ -24,15 +23,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
 
-        # ==========================
+        # =========================
         # Main Layout
-        # ==========================
+        # =========================
 
         main_layout = QVBoxLayout()
 
-        # ==========================
+        # -------------------------
         # Top Bar
-        # ==========================
+        # -------------------------
 
         self.file_label = QLabel("No video selected")
 
@@ -44,28 +43,27 @@ class MainWindow(QMainWindow):
         top_layout.addStretch()
         top_layout.addWidget(self.browse_button)
 
-        # ==========================
-        # Preview Area
-        # ==========================
+        # -------------------------
+        # Preview
+        # -------------------------
 
         self.preview = QLabel("Video Preview")
-
         self.preview.setMinimumHeight(500)
-
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         self.preview.setStyleSheet("""
             QLabel{
-                background:#202020;
-                color:white;
                 border:2px solid #555;
-                font-size:20px;
+                font-size:22px;
+                color:white;
+                background:#222;
             }
         """)
+        self.preview.setAlignment(
+            __import__("PyQt6.QtCore").QtCore.Qt.AlignmentFlag.AlignCenter
+        )
 
-        # ==========================
+        # -------------------------
         # GPU Information
-        # ==========================
+        # -------------------------
 
         gpu = GPUManager.get_gpu_info()
 
@@ -76,22 +74,22 @@ class MainWindow(QMainWindow):
 
         self.gpu_label = QLabel(gpu_text)
 
-        # ==========================
+        # -------------------------
         # Status
-        # ==========================
+        # -------------------------
 
         self.status = QLabel("Status : Ready")
 
-        # ==========================
-        # Remove Background Button
-        # ==========================
+        # -------------------------
+        # Buttons
+        # -------------------------
 
         self.remove_button = QPushButton("Remove Background")
         self.remove_button.setEnabled(False)
 
-        # ==========================
+        # -------------------------
         # Add Widgets
-        # ==========================
+        # -------------------------
 
         main_layout.addLayout(top_layout)
         main_layout.addWidget(self.preview)
@@ -110,13 +108,12 @@ class MainWindow(QMainWindow):
             self,
             "Open Video",
             "",
-            "Video Files (*.mp4 *.mov *.avi)"
+            "Videos (*.mp4 *.mov *.avi)"
         )
 
         if not filename:
             return
 
-        # Open the video through the controller
         info = self.controller.open_video(filename)
 
         self.file_label.setText(filename)
@@ -128,18 +125,3 @@ class MainWindow(QMainWindow):
         )
 
         self.remove_button.setEnabled(True)
-
-        # Display first frame
-        frame = self.controller.first_frame()
-
-        if frame is not None:
-
-            pixmap = PreviewEngine.frame_to_pixmap(frame)
-
-            self.preview.setPixmap(
-                pixmap.scaled(
-                    self.preview.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
