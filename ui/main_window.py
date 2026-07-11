@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
         # Professional editing signals
         self.timeline_editor.split_at_frame.connect(self._on_split_at_frame)
         self.timeline_editor.playhead_dragged.connect(self._on_playhead_dragged)
+        self.timeline_editor.blade_preview_frame.connect(self._on_blade_preview_frame)
 
         # Connect to the coordinator's signal which emits
         # (frame, timeline_frame) instead of raw source frames.
@@ -169,6 +170,10 @@ class MainWindow(QMainWindow):
     def _on_playhead_dragged(self, timeline_frame: int) -> None:
         """Dragging the red playhead line."""
         self.controller.seek(timeline_frame)
+
+    def _on_blade_preview_frame(self, timeline_frame: int) -> None:
+        """Blade mode hover: preview seek without moving playhead."""
+        self.controller.preview_seek(timeline_frame)
 
     def setup_shortcuts(self):
         self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)

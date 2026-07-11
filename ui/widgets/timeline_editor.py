@@ -28,6 +28,7 @@ class TimelineEditor(QWidget):
     # Professional editing signals
     split_at_frame = pyqtSignal(int)
     playhead_dragged = pyqtSignal(int)
+    blade_preview_frame = pyqtSignal(int)
 
     AUTO_SCROLL_MARGIN = 40
 
@@ -77,6 +78,7 @@ class TimelineEditor(QWidget):
         self.canvas.clip_edit_finished.connect(self.clip_edit_finished.emit)
         self.canvas.split_at_frame.connect(self.split_at_frame.emit)
         self.canvas.playhead_dragged.connect(self.playhead_dragged.emit)
+        self.canvas.blade_preview_frame.connect(self.blade_preview_frame.emit)
 
     def set_project(self, project):
         self.project = project

@@ -128,6 +128,10 @@ class AppController:
         """Seek to *frame_index* in timeline-frame space."""
         self.timeline_playback.seek(frame_index)
 
+    def preview_seek(self, frame_index):
+        """Seek decoder to *frame_index* without moving playhead. For blade hover preview."""
+        self.timeline_playback.preview_seek(frame_index)
+
     def next_frame(self):
         self.timeline_playback.step_forward()
 

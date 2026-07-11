@@ -257,6 +257,24 @@ class TimelinePlayback:
 
         return position
 
+    def preview_seek(self, timeline_frame):
+        """
+        Seek the decoder to *timeline_frame* WITHOUT changing the
+        current playhead position. Used for blade-mode hover preview.
+        """
+        playable_frame = self.next_playable_frame(timeline_frame)
+        if playable_frame is None:
+            return None
+
+        position = self.position_at(playable_frame)
+        if position is None:
+            return None
+
+        if self.decoder is not None:
+            self.decoder.seek(position.source_frame)
+
+        return position
+
     def step_forward(self):
         """Advance by one timeline frame."""
         return self.seek(self.current_timeline_frame + 1)
