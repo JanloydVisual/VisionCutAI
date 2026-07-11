@@ -19,8 +19,6 @@ class TimelineCanvas(QWidget):
     clip_selected = pyqtSignal(object)
     clip_move_requested = pyqtSignal(object, int)
     clip_trim_requested = pyqtSignal(object, str, int)
-    clip_edit_started = pyqtSignal()
-    clip_edit_finished = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -166,7 +164,6 @@ class TimelineCanvas(QWidget):
             self.drag_mode = "move"
 
         self.dragging_clip = clip
-        self.clip_edit_started.emit()
         self.drag_start_x = pos.x()
         self.drag_start_frame = clip.timeline_start_frame
         self.update()
@@ -195,8 +192,6 @@ class TimelineCanvas(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
-            if self.dragging_clip is not None:
-                self.clip_edit_finished.emit()
             self.dragging_clip = None
             self.drag_mode = None
         super().mouseReleaseEvent(event)

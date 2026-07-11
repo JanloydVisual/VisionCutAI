@@ -2,7 +2,6 @@ from core.project import Project
 from core.video_engine import VideoEngine
 from core.processing_engine import ProcessingEngine
 from core.project_importer import ProjectImporter
-from core.edit_history import EditHistory
 
 
 class AppController:
@@ -23,9 +22,6 @@ class AppController:
         self.background_removal_active = False
         self.background_removal_error = None
         self.frames_sent_to_processing = 0
-
-        self.history = EditHistory()
-        self._edit_snapshot = None
 
         self.video.frame_ready.connect(self._process_frame)
 
@@ -101,61 +97,27 @@ class AppController:
     def select_clip(self, clip):
         return self.project.timeline.select_clip(clip)
 
-    def begin_timeline_edit(self):
-        if self._edit_snapshot is None:
-            self._edit_snapshot = self.project.timeline.snapshot()
-
-    def end_timeline_edit(self):
-        if self._edit_snapshot is None:
-            return False
-
-        before = self._edit_snapshot
-        self._edit_snapshot = None
-        return self.history.record(before, self.project.timeline.snapshot())
-
-    def _timeline_command(self, action):
-        if self._edit_snapshot is not None:
-            return action()
-        return self.history.execute(self.project.timeline, action)
-
     def move_clip(self, clip, timeline_start_frame):
-        return self._timeline_command(
-            lambda: self.project.timeline.move_clip(clip, timeline_start_frame)
-        )
+        return self.project.timeline.move_clip(clip, timeline_start_frame)
 
     def trim_clip(self, clip, edge, timeline_frame):
         if edge == "start":
-            return self._timeline_command(
-                lambda: self.project.timeline.trim_clip_start(clip, timeline_frame)
-            )
+            return self.project.timeline.trim_clip_start(clip, timeline_frame)
         if edge == "end":
-            return self._timeline_command(
-                lambda: self.project.timeline.trim_clip_end(clip, timeline_frame)
-            )
+            return self.project.timeline.trim_clip_end(clip, timeline_frame)
         return False
 
     def split_selected_clip_at_playhead(self):
         clip = self.selected_clip()
         if clip is None:
             return False
-
-        return self._timeline_command(
-            lambda: self.project.timeline.split_clip(
-                clip,
-                self.video.current_frame_index,
-            )
+        return self.project.timeline.split_clip(
+            clip,
+            self.video.current_frame_index,
         )
 
     def delete_selected_clip(self):
-        return self._timeline_command(
-            self.project.timeline.delete_selected_clip
-        )
-
-    def undo_timeline(self):
-        return self.history.undo(self.project.timeline)
-
-    def redo_timeline(self):
-        return self.history.redo(self.project.timeline)
+        return self.project.timeline.delete_selected_clip()
 
     def release(self):
         self.video.release()

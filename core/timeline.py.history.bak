@@ -163,56 +163,6 @@ class Timeline:
         self._changed()
         return True
 
-    def snapshot(self):
-        clips = []
-        selected_index = None
-
-        for index, clip in enumerate(self.clips):
-            if clip == self.selected_clip:
-                selected_index = index
-
-            clips.append({
-                "source_path": clip.source_path,
-                "start_frame": clip.start_frame,
-                "end_frame": clip.end_frame,
-                "fps": clip.fps,
-                "duration": clip.duration,
-                "timeline_start_frame": clip.timeline_start_frame,
-                "background_removed": clip.background_removed,
-                "effects": list(clip.effects),
-            })
-
-        return {
-            "clips": clips,
-            "selected_index": selected_index,
-        }
-
-    def restore(self, snapshot):
-        restored_clips = [
-            Clip(
-                source_path=data["source_path"],
-                start_frame=data["start_frame"],
-                end_frame=data["end_frame"],
-                fps=data["fps"],
-                duration=data["duration"],
-                timeline_start_frame=data["timeline_start_frame"],
-                background_removed=data["background_removed"],
-                effects=list(data["effects"]),
-            )
-            for data in snapshot["clips"]
-        ]
-
-        self.video_tracks[0].clips = restored_clips
-
-        selected_index = snapshot.get("selected_index")
-        self.selected_clip = (
-            restored_clips[selected_index]
-            if selected_index is not None and selected_index < len(restored_clips)
-            else None
-        )
-
-        self._changed()
-
     def clear(self):
         for track in self.tracks:
             track.clips.clear()

@@ -23,8 +23,6 @@ class TimelineEditor(QWidget):
     clip_selected = pyqtSignal(object)
     clip_move_requested = pyqtSignal(object, int)
     clip_trim_requested = pyqtSignal(object, str, int)
-    clip_edit_started = pyqtSignal()
-    clip_edit_finished = pyqtSignal()
 
     AUTO_SCROLL_MARGIN = 40
 
@@ -70,8 +68,6 @@ class TimelineEditor(QWidget):
         self.canvas.clip_selected.connect(self.clip_selected.emit)
         self.canvas.clip_move_requested.connect(self.clip_move_requested.emit)
         self.canvas.clip_trim_requested.connect(self.clip_trim_requested.emit)
-        self.canvas.clip_edit_started.connect(self.clip_edit_started.emit)
-        self.canvas.clip_edit_finished.connect(self.clip_edit_finished.emit)
 
     def set_project(self, project):
         self.project = project

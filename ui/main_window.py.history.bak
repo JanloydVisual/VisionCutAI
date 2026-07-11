@@ -7,8 +7,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage, QPixmap
 
 from config import APP_NAME
 from core.controller import AppController
@@ -34,7 +33,6 @@ class MainWindow(QMainWindow):
 
         self.build_ui()
         self.connect_signals()
-        self.setup_shortcuts()
 
     def build_ui(self):
         layout = QVBoxLayout()
@@ -96,29 +94,12 @@ class MainWindow(QMainWindow):
         self.timeline_editor.clip_trim_requested.connect(self.trim_timeline_clip)
         self.timeline_editor.split_requested.connect(self.split_timeline_clip)
         self.timeline_editor.delete_requested.connect(self.delete_timeline_clip)
-        self.timeline_editor.clip_edit_started.connect(
-            self.controller.begin_timeline_edit
-        )
-        self.timeline_editor.clip_edit_finished.connect(
-            self.finish_timeline_edit
-        )
 
         engine = self.controller.video
         engine.video_loaded.connect(self.video_loaded)
         engine.frame_ready.connect(self.update_preview)
 
         self.processing_bridge.frame_processed.connect(self.update_processed_frame)
-
-    def setup_shortcuts(self):
-        self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
-        self.redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
-        self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
-        self.backspace_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self)
-
-        self.undo_shortcut.activated.connect(self.undo_timeline)
-        self.redo_shortcut.activated.connect(self.redo_timeline)
-        self.delete_shortcut.activated.connect(self.delete_timeline_clip)
-        self.backspace_shortcut.activated.connect(self.delete_timeline_clip)
 
     def open_video(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -198,20 +179,6 @@ class MainWindow(QMainWindow):
             self.video_player.set_status("Selected clip deleted")
         else:
             self.video_player.set_status("No selected clip to delete")
-
-    def finish_timeline_edit(self):
-        if self.controller.end_timeline_edit():
-            self.timeline_editor.refresh()
-
-    def undo_timeline(self):
-        if self.controller.undo_timeline():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Timeline edit undone")
-
-    def redo_timeline(self):
-        if self.controller.redo_timeline():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Timeline edit redone")
 
     def update_preview(self, frame):
         self._last_original_shape = tuple(frame.shape)
