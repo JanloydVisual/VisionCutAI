@@ -26,10 +26,6 @@ class TimelineCanvas(QWidget):
 
         self.selected_clip = None
 
-        self.dragging_clip = None
-        self.drag_start_x = 0
-        self.drag_start_frame = 0
-
         self.setMinimumSize(4000, 300)
 
     def set_timeline(self, timeline):
@@ -56,6 +52,7 @@ class TimelineCanvas(QWidget):
             QColor(36,36,36)
         )
 
+        # ruler
         painter.fillRect(
             0,
             0,
@@ -107,7 +104,6 @@ class TimelineCanvas(QWidget):
                 QColor(58,58,58)
             )
 
-
             painter.setPen(
                 Qt.GlobalColor.white
             )
@@ -119,24 +115,18 @@ class TimelineCanvas(QWidget):
             )
 
 
-            for clip in track.clips:
+            x = TRACK_LABEL_WIDTH
 
-                x = (
-                    TRACK_LABEL_WIDTH
-                    +
-                    clip.timeline_start_frame
-                    *
-                    PIXELS_PER_FRAME
-                )
+
+            for clip in track.clips:
 
                 width = max(
                     120,
                     clip.frame_count * PIXELS_PER_FRAME
                 )
 
-
                 rect = QRect(
-                    int(x),
+                    x,
                     y + 8,
                     width,
                     44
@@ -175,15 +165,17 @@ class TimelineCanvas(QWidget):
                 )
 
 
+                x += width + 8
+
+
             y += TRACK_HEIGHT + TRACK_GAP
 
 
+        # playhead
+
         playhead_x = (
-            TRACK_LABEL_WIDTH
-            +
-            self.playhead_frame
-            *
-            PIXELS_PER_FRAME
+            TRACK_LABEL_WIDTH +
+            self.playhead_frame * PIXELS_PER_FRAME
         )
 
         painter.setPen(
@@ -201,57 +193,14 @@ class TimelineCanvas(QWidget):
         )
 
 
-    def find_clip_at(self, x, y):
-
-        if self.timeline is None:
-            return None
-
-
-        track_y = TRACK_START_Y
-
-
-        for track in self.timeline.tracks:
-
-            for clip in track.clips:
-
-                clip_x = (
-                    TRACK_LABEL_WIDTH
-                    +
-                    clip.timeline_start_frame
-                    *
-                    PIXELS_PER_FRAME
-                )
-
-                width = max(
-                    120,
-                    clip.frame_count * PIXELS_PER_FRAME
-                )
-
-
-                rect = QRect(
-                    int(clip_x),
-                    track_y + 8,
-                    width,
-                    44
-                )
-
-
-                if rect.contains(x, y):
-                    return clip
-
-
-            track_y += TRACK_HEIGHT + TRACK_GAP
-
-
-        return None
-
-
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
 
         if event.button() == Qt.MouseButton.LeftButton:
 
             pos = event.position()
 
+
+            # ruler seek
 
             if (
                 pos.y() <= RULER_HEIGHT
@@ -272,71 +221,59 @@ class TimelineCanvas(QWidget):
                     max(0, frame)
                 )
 
-                return
-
-
-            clip = self.find_clip_at(
-                int(pos.x()),
-                int(pos.y())
-            )
-
-
-            if clip:
-
-                self.selected_clip = clip
-
-                self.timeline.select_clip(
-                    clip
-                )
-
-                self.dragging_clip = clip
-
-                self.drag_start_x = pos.x()
-
-                self.drag_start_frame = (
-                    clip.timeline_start_frame
-                )
-
-                self.update()
-
                 event.accept()
                 return
 
 
+            # clip selection
+
+            if self.timeline:
+
+                y = TRACK_START_Y
+
+
+                for track in self.timeline.tracks:
+
+                    x = TRACK_LABEL_WIDTH
+
+
+                    for clip in track.clips:
+
+                        width = max(
+                            120,
+                            clip.frame_count * PIXELS_PER_FRAME
+                        )
+
+
+                        rect = QRect(
+                            x,
+                            y + 8,
+                            width,
+                            44
+                        )
+
+
+                        if rect.contains(
+                            int(pos.x()),
+                            int(pos.y())
+                        ):
+
+                            self.selected_clip = clip
+
+                            self.timeline.select_clip(
+                                clip
+                            )
+
+                            self.update()
+
+                            event.accept()
+                            return
+
+
+                        x += width + 8
+
+
+                    y += TRACK_HEIGHT + TRACK_GAP
+
+
         super().mousePressEvent(event)
-
-
-    def mouseMoveEvent(self, event):
-
-        if self.dragging_clip:
-
-            delta_x = (
-                event.position().x()
-                -
-                self.drag_start_x
-            )
-
-            frame_delta = int(
-                delta_x / PIXELS_PER_FRAME
-            )
-
-
-            self.dragging_clip.timeline_start_frame = max(
-                0,
-                self.drag_start_frame + frame_delta
-            )
-
-
-            self.update()
-
-
-        super().mouseMoveEvent(event)
-
-
-    def mouseReleaseEvent(self, event):
-
-        if event.button() == Qt.MouseButton.LeftButton:
-
-            self.dragging_clip = None
-
-        super().mouseReleaseEvent(event)
