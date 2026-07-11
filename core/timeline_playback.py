@@ -44,6 +44,9 @@ class TimelinePlayback:
     timeline-frame-oriented interface to the rest of the app.
     """
 
+    # Speed multiplier levels (forward positive, reverse negative)
+    SPEED_LEVELS = [1, 2, 4]
+
     def __init__(self, timeline, decoder=None):
         self.timeline = timeline
         self.decoder = decoder
@@ -54,6 +57,7 @@ class TimelinePlayback:
         self.frame_ready = Signal()
 
         self._play_direction = 1
+        self._playback_speed = 1
         self._timer = None
 
         if decoder is not None:
@@ -123,6 +127,45 @@ class TimelinePlayback:
         return None
 
     # ------------------------------------------------------------------
+    # Playback speed
+    # ------------------------------------------------------------------
+
+    @property
+    def playback_speed(self) -> int:
+        """Current speed multiplier: 1, 2, or 4 (positive = forward, negative = reverse)."""
+        return self._playback_speed * self._play_direction
+
+    def increase_forward_speed(self) -> None:
+        """Cycle forward speed: 1x → 2x → 4x."""
+        current = abs(self._playback_speed)
+        idx = self.SPEED_LEVELS.index(current) if current in self.SPEED_LEVELS else 0
+        next_idx = min(idx + 1, len(self.SPEED_LEVELS) - 1)
+        self._playback_speed = self.SPEED_LEVELS[next_idx]
+        self._play_direction = 1
+        self._apply_speed()
+
+    def increase_reverse_speed(self) -> None:
+        """Cycle reverse speed: -1x → -2x → -4x."""
+        current = abs(self._playback_speed)
+        idx = self.SPEED_LEVELS.index(current) if current in self.SPEED_LEVELS else 0
+        next_idx = min(idx + 1, len(self.SPEED_LEVELS) - 1)
+        self._playback_speed = self.SPEED_LEVELS[next_idx]
+        self._play_direction = -1
+        self._apply_speed()
+
+    def reset_playback_speed(self) -> None:
+        """Reset speed to 1x forward."""
+        self._playback_speed = 1
+        self._play_direction = 1
+
+    def _apply_speed(self) -> None:
+        """Update the timer interval to match current speed."""
+        if self._timer is not None and self.is_playing:
+            fps = self._get_fps()
+            interval = int(1000 / (fps * abs(self._playback_speed)))
+            self._timer.setInterval(max(1, interval))
+
+    # ------------------------------------------------------------------
     # Playback control
     # ------------------------------------------------------------------
 
@@ -146,27 +189,31 @@ class TimelinePlayback:
             self.play()
 
     def play(self) -> None:
-        """Start forward playback from the current timeline position."""
+        """Start forward playback at the current speed."""
         if not self.decoder or not self.decoder.is_loaded:
             return
         self._play_direction = 1
+        fps = self._get_fps()
+        interval = int(1000 / (fps * abs(self._playback_speed)))
         timer = self._ensure_timer()
-        timer.setInterval(int(1000 / self._get_fps()))
+        timer.setInterval(max(1, interval))
         self.is_playing = True
         timer.start()
 
     def play_reverse(self) -> None:
-        """Start reverse playback from the current timeline position."""
+        """Start reverse playback at the current speed."""
         if not self.decoder or not self.decoder.is_loaded:
             return
         self._play_direction = -1
+        fps = self._get_fps()
+        interval = int(1000 / (fps * abs(self._playback_speed)))
         timer = self._ensure_timer()
-        timer.setInterval(int(1000 / self._get_fps()))
+        timer.setInterval(max(1, interval))
         self.is_playing = True
         timer.start()
 
     def pause(self) -> None:
-        """Pause playback."""
+        """Pause playback. Does NOT reset speed."""
         self.is_playing = False
         if self._timer is not None:
             self._timer.stop()

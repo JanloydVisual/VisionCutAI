@@ -146,6 +146,10 @@ class MainWindow(QMainWindow):
             self.finish_timeline_edit
         )
 
+        # Professional editing signals
+        self.timeline_editor.split_at_frame.connect(self._on_split_at_frame)
+        self.timeline_editor.playhead_dragged.connect(self._on_playhead_dragged)
+
         # Connect to the coordinator's signal which emits
         # (frame, timeline_frame) instead of raw source frames.
         self.controller.frame_ready.connect(self.update_preview)
@@ -155,6 +159,16 @@ class MainWindow(QMainWindow):
         self.controller.video.video_loaded.connect(self.video_loaded)
 
         self.processing_bridge.frame_processed.connect(self.update_processed_frame)
+
+    def _on_split_at_frame(self, timeline_frame: int) -> None:
+        """Blade tool: split clip at the clicked timeline position."""
+        if self.controller.split_at_position(timeline_frame):
+            self.timeline_editor.refresh()
+            self.video_player.set_status(f"Clip split at frame {timeline_frame}")
+
+    def _on_playhead_dragged(self, timeline_frame: int) -> None:
+        """Dragging the red playhead line."""
+        self.controller.seek(timeline_frame)
 
     def setup_shortcuts(self):
         self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
@@ -167,34 +181,58 @@ class MainWindow(QMainWindow):
         self.delete_shortcut.activated.connect(self.delete_timeline_clip)
         self.backspace_shortcut.activated.connect(self.delete_timeline_clip)
 
-        # -- Global keyboard playback controls (JKL / Space) ------------
+        # -- Global keyboard playback controls (JKL / Space / B) --------
+        # Space: toggle play/pause
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self.space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.space_shortcut.activated.connect(self._toggle_playback)
 
+        # J: reverse playback (cycle speed: -1x → -2x → -4x)
         self.j_shortcut = QShortcut(QKeySequence(Qt.Key.Key_J), self)
         self.j_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.j_shortcut.activated.connect(self._play_reverse)
+        self.j_shortcut.activated.connect(self._increase_reverse_speed)
 
+        # K: pause + reset speed to 1x
         self.k_shortcut = QShortcut(QKeySequence(Qt.Key.Key_K), self)
         self.k_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.k_shortcut.activated.connect(self._pause_playback)
+        self.k_shortcut.activated.connect(self._pause_and_reset_speed)
 
+        # L: forward playback (cycle speed: 1x → 2x → 4x)
         self.l_shortcut = QShortcut(QKeySequence(Qt.Key.Key_L), self)
         self.l_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.l_shortcut.activated.connect(self._play_forward)
+        self.l_shortcut.activated.connect(self._increase_forward_speed)
+
+        # B: toggle blade mode
+        self.b_shortcut = QShortcut(QKeySequence(Qt.Key.Key_B), self)
+        self.b_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.b_shortcut.activated.connect(self._toggle_blade_mode)
+
+    # -- Playback helpers ------------------------------------------------
 
     def _toggle_playback(self):
         self.controller.toggle_playback()
 
-    def _play_reverse(self):
-        self.controller.play_reverse()
+    def _increase_forward_speed(self):
+        """L key: cycle forward speed 1x → 2x → 4x."""
+        self.controller.increase_forward_speed()
 
-    def _pause_playback(self):
+    def _increase_reverse_speed(self):
+        """J key: cycle reverse speed -1x → -2x → -4x."""
+        self.controller.increase_reverse_speed()
+
+    def _pause_and_reset_speed(self):
+        """K key: pause and reset speed to 1x."""
         self.controller.pause()
+        self.controller.reset_playback_speed()
 
-    def _play_forward(self):
-        self.controller.play()
+    def _toggle_blade_mode(self):
+        """B key: toggle blade mode on/off."""
+        enabled = self.controller.toggle_blade_mode()
+        self.timeline_editor.set_blade_mode(enabled)
+        if enabled:
+            self.video_player.set_status("Blade Mode")
+        else:
+            self.video_player.set_status("Selection Mode")
 
     def open_video(self):
         filename, _ = QFileDialog.getOpenFileName(

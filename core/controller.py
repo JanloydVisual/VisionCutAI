@@ -42,6 +42,9 @@ class AppController:
         # the background-removal pipeline (unchanged path).
         self.video.frame_ready.connect(self._process_frame)
 
+        # -- Blade mode state -------------------------------------------
+        self._blade_mode = False
+
         self._init_ai_processor()
 
     def _init_ai_processor(self):
@@ -64,6 +67,10 @@ class AppController:
         if self.background_removal_available:
             return f"Background removal ready ({self.ai_device_label})"
         return self.background_removal_error or "Background removal is unavailable"
+
+    @property
+    def blade_mode(self) -> bool:
+        return self._blade_mode
 
     def start_background_removal(self):
         """Activates AI processing and processes the current preview frame."""
@@ -96,15 +103,19 @@ class AppController:
         self.timeline_playback.seek(0)
         return info
 
+    # ------------------------------------------------------------------
+    # Playback
+    # ------------------------------------------------------------------
+
     def toggle_playback(self):
-        """Toggle between play and pause. Idempotent - safe to call repeatedly."""
+        """Toggle between play and pause."""
         self.timeline_playback.toggle_playback()
 
     def play(self):
         self.timeline_playback.play()
 
     def play_reverse(self):
-        """Start reverse playback (J key)."""
+        """Start reverse playback."""
         self.timeline_playback.play_reverse()
 
     def pause(self):
@@ -113,15 +124,57 @@ class AppController:
     def stop(self):
         self.timeline_playback.stop()
 
+    def seek(self, frame_index):
+        """Seek to *frame_index* in timeline-frame space."""
+        self.timeline_playback.seek(frame_index)
+
     def next_frame(self):
         self.timeline_playback.step_forward()
 
     def previous_frame(self):
         self.timeline_playback.step_backward()
 
-    def seek(self, frame_index):
-        """Seek to *frame_index* in timeline-frame space."""
-        self.timeline_playback.seek(frame_index)
+    # ------------------------------------------------------------------
+    # JKL shuttle speed
+    # ------------------------------------------------------------------
+
+    def increase_forward_speed(self):
+        """Cycle forward speed: 1x → 2x → 4x."""
+        self.timeline_playback.increase_forward_speed()
+
+    def increase_reverse_speed(self):
+        """Cycle reverse speed: -1x → -2x → -4x."""
+        self.timeline_playback.increase_reverse_speed()
+
+    def reset_playback_speed(self):
+        """Reset to 1x forward."""
+        self.timeline_playback.reset_playback_speed()
+
+    # ------------------------------------------------------------------
+    # Blade mode
+    # ------------------------------------------------------------------
+
+    def toggle_blade_mode(self) -> bool:
+        """Toggle blade mode on/off. Returns the new state."""
+        self._blade_mode = not self._blade_mode
+        return self._blade_mode
+
+    def split_at_position(self, timeline_frame: int) -> bool:
+        """
+        Split any clip covering *timeline_frame*.
+        Returns True if a split was performed.
+        """
+        clip = self.project.timeline.clip_at_timeline_frame(timeline_frame)
+        if clip is None:
+            return False
+
+        return self._timeline_command(
+            lambda: self.project.timeline.split_clip(clip, timeline_frame)
+        )
+
+    # ------------------------------------------------------------------
+    # Clip selection / editing
+    # ------------------------------------------------------------------
 
     def selected_clip(self):
         return self.project.timeline.get_selected_clip()
