@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QFont, QCursor
+from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QFont, QCursor, QFontMetrics
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 
 
@@ -12,8 +12,10 @@ TRACK_START_Y = 40
 TRACK_LABEL_WIDTH = 140
 RULER_HEIGHT = 30
 TRIM_HANDLE_WIDTH = 8
-PLAYHEAD_HANDLE_HALF_WIDTH = 8    # Half-width of the red handle (total 16px)
-PLAYHEAD_HANDLE_HEIGHT = 22        # Height of the clickable grab area at the top
+PLAYHEAD_HANDLE_HALF_WIDTH = 8
+PLAYHEAD_HANDLE_HEIGHT = 22
+FLOAT_BOX_WIDTH = 160
+FLOAT_BOX_PADDING = 8
 
 
 class TimelineCanvas(QWidget):
@@ -26,6 +28,7 @@ class TimelineCanvas(QWidget):
     # Professional editing signals
     split_at_frame = pyqtSignal(int)
     playhead_dragged = pyqtSignal(int)
+    blade_preview_frame = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,13 +48,20 @@ class TimelineCanvas(QWidget):
         self._dragging_playhead = False
         self._hovering_playhead = False
 
+        # Blade preview
+        self._blade_preview_frame = -1  # -1 = not visible
+        self._blade_mouse_y = 0
+
         self.setMinimumSize(4000, 300)
-        self.setMouseTracking(True)  # Enable mouse tracking for hover detection
+        self.setMouseTracking(True)
         self._update_cursor()
 
     def set_blade_mode(self, enabled: bool) -> None:
         self.blade_mode = enabled
+        if not enabled:
+            self._blade_preview_frame = -1
         self._update_cursor()
+        self.update()
 
     def _update_cursor(self) -> None:
         if self._dragging_playhead:
@@ -100,7 +110,6 @@ class TimelineCanvas(QWidget):
         return TRACK_LABEL_WIDTH + self.playhead_frame * PIXELS_PER_FRAME
 
     def _playhead_handle_rect(self):
-        """QRect of the top red handle grab area."""
         phx = self._playhead_x()
         return QRect(
             phx - PLAYHEAD_HANDLE_HALF_WIDTH,
@@ -110,28 +119,92 @@ class TimelineCanvas(QWidget):
         )
 
     def _playhead_hit_test(self, x, y):
-        """Returns True if (x, y) is inside the red playhead handle area (top of line)."""
         return self._playhead_handle_rect().contains(x, y)
+
+    # ------------------------------------------------------------------
+    # Floating blade info box
+    # ------------------------------------------------------------------
+
+    def _draw_blade_info_box(self, painter, blade_x: int, preview_frame: int):
+        """Draw a floating info box near the blade preview line."""
+        if self.timeline is None:
+            return
+
+        clip = self.timeline.clip_at_timeline_frame(preview_frame)
+        if clip is None:
+            return
+
+        # Calculate cut info
+        seconds = preview_frame / self.fps if self.fps > 0 else 0
+        cut_offset = preview_frame - clip.timeline_start_frame
+        cut_source_frame = clip.start_frame + cut_offset
+        cut_seconds = cut_source_frame / self.fps if self.fps > 0 else 0
+        clip_duration = clip.frame_count / self.fps if self.fps > 0 else 0
+        before_seconds = cut_offset / self.fps if self.fps > 0 else 0
+        after_seconds = (clip.frame_count - cut_offset - 1) / self.fps if self.fps > 0 else 0
+
+        # Build text lines
+        lines = [
+            "Cut Position",
+            f"Frame: {preview_frame}",
+            f"Time: {seconds:.2f}s",
+            f"Before: {before_seconds:.2f}s",
+            f"After:  {after_seconds:.2f}s",
+        ]
+
+        # Measure text
+        info_font = QFont("monospace", 9)
+        info_font.setBold(False)
+        painter.setFont(info_font)
+        fm = QFontMetrics(info_font)
+
+        line_height = fm.height() + 2
+        box_w = FLOAT_BOX_WIDTH
+        box_h = len(lines) * line_height + FLOAT_BOX_PADDING * 2
+
+        # Position box to the right of the blade line, or to the left if near edge
+        box_x = blade_x + 12
+        if box_x + box_w > self.width():
+            box_x = blade_x - box_w - 12
+        box_x = max(4, box_x)
+
+        box_y = min(self._blade_mouse_y, self.height() - box_h - 4)
+        box_y = max(RULER_HEIGHT + 4, box_y)
+
+        # Draw background
+        painter.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        painter.setBrush(QColor(20, 20, 20, 220))
+        painter.drawRoundedRect(box_x, box_y, box_w, box_h, 4, 4)
+
+        # Draw text
+        painter.setPen(Qt.GlobalColor.white)
+        text_x = box_x + FLOAT_BOX_PADDING
+        text_y = box_y + FLOAT_BOX_PADDING + fm.ascent()
+
+        for i, line in enumerate(lines):
+            if i == 0:
+                info_font.setBold(True)
+                painter.setFont(info_font)
+                painter.setPen(QColor(255, 200, 100))
+            else:
+                info_font.setBold(False)
+                painter.setFont(info_font)
+                painter.setPen(Qt.GlobalColor.white)
+            painter.drawText(text_x, text_y + i * line_height, line)
 
     # ------------------------------------------------------------------
     # Painting
     # ------------------------------------------------------------------
 
     def _draw_track_background(self, painter, y, track):
-        """Draw the track background row and its label in the left margin."""
-        # Track background
         painter.fillRect(
             TRACK_LABEL_WIDTH, y, self.width(), TRACK_HEIGHT, QColor(58, 58, 58)
         )
-        # Track label area (left margin)
         painter.fillRect(
             0, y, TRACK_LABEL_WIDTH, TRACK_HEIGHT, QColor(43, 43, 43)
         )
-        # Separator line between label and track content
         painter.setPen(QPen(QColor(80, 80, 80), 1))
         painter.drawLine(TRACK_LABEL_WIDTH, y, TRACK_LABEL_WIDTH, y + TRACK_HEIGHT)
-
-        # Track name label
         painter.setPen(Qt.GlobalColor.white)
         label_font = QFont()
         label_font.setBold(True)
@@ -153,7 +226,6 @@ class TimelineCanvas(QWidget):
         painter.setPen(QPen(QColor(80, 80, 80), 1))
         painter.drawLine(TRACK_LABEL_WIDTH, 0, TRACK_LABEL_WIDTH, RULER_HEIGHT)
 
-        # Ruler tick marks and time labels
         painter.setPen(QPen(QColor(110, 110, 110)))
         for x in range(TRACK_LABEL_WIDTH, self.width(), 100):
             painter.drawLine(x, 0, x, RULER_HEIGHT)
@@ -201,23 +273,29 @@ class TimelineCanvas(QWidget):
 
             y += TRACK_HEIGHT + TRACK_GAP
 
-        # -- Playhead: thin vertical red line down the entire height --
+        # -- Blade preview line (only in blade mode, follows mouse) --
+        if self.blade_mode and self._blade_preview_frame >= 0:
+            blade_x = TRACK_LABEL_WIDTH + self._blade_preview_frame * PIXELS_PER_FRAME
+            painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(blade_x, RULER_HEIGHT, blade_x, self.height())
+
+            # Floating info box
+            self._draw_blade_info_box(painter, blade_x, self._blade_preview_frame)
+
+        # -- Playhead: thin vertical red line --
         playhead_x = self._playhead_x()
         painter.setPen(QPen(QColor(255, 60, 60), 2))
         painter.drawLine(playhead_x, PLAYHEAD_HANDLE_HEIGHT, playhead_x, self.height())
 
-        # -- Playhead handle: prominent red grab handle at the top --
+        # -- Playhead handle --
         handle_rect = self._playhead_handle_rect()
         painter.setBrush(QColor(255, 60, 60))
         painter.setPen(QPen(QColor(200, 40, 40), 1))
         painter.drawRect(handle_rect)
 
-        # Draw a small triangle/arrow indicator inside the handle
         painter.setPen(QPen(QColor(255, 200, 200), 1))
         mid_x = handle_rect.center().x()
         handle_top = handle_rect.top() + 4
-        handle_bottom = handle_rect.bottom() - 4
-        # Small arrow pointing down
         for offset in range(3):
             left = mid_x - 4 + offset * 3
             right = mid_x + 4 - offset * 3
@@ -255,6 +333,19 @@ class TimelineCanvas(QWidget):
             event.accept()
             return
 
+        # Blade preview: update preview line AND emit preview seek signal
+        if self.blade_mode and x >= TRACK_LABEL_WIDTH:
+            preview_frame = self._timeline_frame_at(x)
+            self._blade_mouse_y = y
+            if preview_frame != self._blade_preview_frame:
+                self._blade_preview_frame = preview_frame
+                self.blade_preview_frame.emit(preview_frame)
+                self.update()
+        else:
+            if self._blade_preview_frame >= 0:
+                self._blade_preview_frame = -1
+                self.update()
+
         # Hover detection for the playhead handle
         was_hovering = self._hovering_playhead
         self._hovering_playhead = self._playhead_hit_test(x, y) and x >= TRACK_LABEL_WIDTH
@@ -289,7 +380,7 @@ class TimelineCanvas(QWidget):
         pos = event.position()
         x, y = int(pos.x()), int(pos.y())
 
-        # 1. Playhead drag: highest priority - only activates on the handle
+        # 1. Playhead drag: highest priority
         if self._playhead_hit_test(x, y) and x >= TRACK_LABEL_WIDTH:
             self._dragging_playhead = True
             self._update_cursor()
@@ -303,7 +394,7 @@ class TimelineCanvas(QWidget):
             event.accept()
             return
 
-        # 3. Blade mode: split on clip click instead of selecting
+        # 3. Blade mode: split on clip click
         if self.blade_mode:
             clip = self.find_clip_at(x, y)
             if clip is not None:
@@ -311,10 +402,9 @@ class TimelineCanvas(QWidget):
                 event.accept()
                 return
 
-        # 4. Normal clip interaction (select / move / trim)
+        # 4. Normal clip interaction
         clip = self.find_clip_at(x, y)
         if clip is None:
-            # Click in empty space - seek there
             if x >= TRACK_LABEL_WIDTH:
                 self.ruler_clicked.emit(self._timeline_frame_at(x))
             return super().mousePressEvent(event)
