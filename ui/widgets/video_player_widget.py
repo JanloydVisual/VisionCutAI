@@ -23,6 +23,7 @@ class VideoPlayerWidget(QWidget):
     play_clicked = pyqtSignal()
     pause_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
+    remove_bg_clicked = pyqtSignal()
     frame_scrubbed = pyqtSignal(int)
     next_frame_clicked = pyqtSignal()
     previous_frame_clicked = pyqtSignal()
@@ -55,6 +56,7 @@ class VideoPlayerWidget(QWidget):
         self.controls.play_clicked.connect(self.play_clicked.emit)
         self.controls.pause_clicked.connect(self.pause_clicked.emit)
         self.controls.stop_clicked.connect(self.stop_clicked.emit)
+        self.controls.remove_bg_clicked.connect(self.remove_bg_clicked.emit)
 
         self.timeline.frame_scrubbed.connect(self.frame_scrubbed.emit)
         self.timeline.next_frame_clicked.connect(self.next_frame_clicked.emit)
@@ -77,6 +79,12 @@ class VideoPlayerWidget(QWidget):
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(text)
+
+    def set_remove_bg_enabled(self, enabled: bool) -> None:
+        self.controls.set_remove_bg_enabled(enabled)
+
+    def set_remove_bg_text(self, text: str) -> None:
+        self.controls.set_remove_bg_text(text)
 
     def set_video_info(self, info: str) -> None:
         self.info_label.setText(info)

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent
+from PyQt6.QtGui import QPainter, QColor, QPen, QMouseEvent, QFont
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 
 
@@ -66,11 +66,44 @@ class TimelineCanvas(QWidget):
     def _timeline_frame_at(self, x):
         return max(0, int((x - TRACK_LABEL_WIDTH) / PIXELS_PER_FRAME))
 
+    def _draw_track_background(self, painter, y, track):
+        """Draw the track background row and its label in the left margin."""
+        # Track background
+        painter.fillRect(
+            TRACK_LABEL_WIDTH, y, self.width(), TRACK_HEIGHT, QColor(58, 58, 58)
+        )
+        # Track label area (left margin)
+        painter.fillRect(
+            0, y, TRACK_LABEL_WIDTH, TRACK_HEIGHT, QColor(43, 43, 43)
+        )
+        # Separator line between label and track content
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawLine(TRACK_LABEL_WIDTH, y, TRACK_LABEL_WIDTH, y + TRACK_HEIGHT)
+
+        # Track name label
+        painter.setPen(Qt.GlobalColor.white)
+        label_font = QFont()
+        label_font.setBold(True)
+        label_font.setPointSize(9)
+        painter.setFont(label_font)
+        painter.drawText(
+            QRect(8, y, TRACK_LABEL_WIDTH - 12, TRACK_HEIGHT),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            track.name,
+        )
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(36, 36, 36))
-        painter.fillRect(0, 0, self.width(), RULER_HEIGHT, QColor(48, 48, 48))
 
+        # -- Ruler area --
+        painter.fillRect(0, 0, self.width(), RULER_HEIGHT, QColor(48, 48, 48))
+        # Ruler label area (left margin)
+        painter.fillRect(0, 0, TRACK_LABEL_WIDTH, RULER_HEIGHT, QColor(38, 38, 38))
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawLine(TRACK_LABEL_WIDTH, 0, TRACK_LABEL_WIDTH, RULER_HEIGHT)
+
+        # Ruler tick marks and time labels
         painter.setPen(QPen(QColor(110, 110, 110)))
         for x in range(TRACK_LABEL_WIDTH, self.width(), 100):
             painter.drawLine(x, 0, x, RULER_HEIGHT)
@@ -80,13 +113,10 @@ class TimelineCanvas(QWidget):
         if self.timeline is None:
             return
 
+        # -- Track rows --
         y = TRACK_START_Y
         for track in self.timeline.tracks:
-            painter.fillRect(
-                TRACK_LABEL_WIDTH, y, self.width(), TRACK_HEIGHT, QColor(58, 58, 58)
-            )
-            painter.setPen(Qt.GlobalColor.white)
-            painter.drawText(10, y + 35, track.name)
+            self._draw_track_background(painter, y, track)
 
             for clip in track.clips:
                 rect = self._clip_rect(clip, y)
@@ -121,6 +151,7 @@ class TimelineCanvas(QWidget):
 
             y += TRACK_HEIGHT + TRACK_GAP
 
+        # -- Playhead line --
         playhead_x = TRACK_LABEL_WIDTH + self.playhead_frame * PIXELS_PER_FRAME
         painter.setPen(QPen(QColor(255, 60, 60), 2))
         painter.drawLine(playhead_x, 0, playhead_x, self.height())

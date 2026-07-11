@@ -14,7 +14,6 @@ from ui.widgets.timeline.timeline_canvas import (
     TRACK_LABEL_WIDTH,
     PIXELS_PER_FRAME,
 )
-from ui.widgets.timeline.track_header import TrackHeader
 
 
 class TimelineEditor(QWidget):
@@ -50,15 +49,12 @@ class TimelineEditor(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        self.header = TrackHeader("Video Track 1")
-
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
 
         self.canvas = TimelineCanvas()
         self.scroll.setWidget(self.canvas)
 
-        body.addWidget(self.header)
         body.addWidget(self.scroll)
         root.addLayout(body)
 

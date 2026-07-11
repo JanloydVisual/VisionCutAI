@@ -20,6 +20,21 @@ from ui.widgets.timeline_editor import TimelineEditor
 from ui.engine_bridge import ProcessingBridge
 
 
+SPLITTER_STYLE = """
+QSplitter::handle {
+    background-color: #444;
+    height: 3px;
+    margin: 0;
+}
+QSplitter::handle:hover {
+    background-color: #2d7d46;
+}
+QSplitter::handle:pressed {
+    background-color: #3a9d5a;
+}
+"""
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -56,8 +71,9 @@ class MainWindow(QMainWindow):
 
         # -- Vertical splitter: preview (top) / timeline + info (bottom) --
         self.splitter = QSplitter(Qt.Orientation.Vertical)
-        self.splitter.setHandleWidth(6)
+        self.splitter.setHandleWidth(8)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.setStyleSheet(SPLITTER_STYLE)
 
         # Top section: video player (preview + controls + scrub bar)
         self.video_player = VideoPlayerWidget()
@@ -90,14 +106,10 @@ class MainWindow(QMainWindow):
         self.ai_status_label.setWordWrap(True)
         self.ai_status_label.setStyleSheet("color: #888; font-size: 11px;")
 
-        self.remove_button = QPushButton("Remove Background")
-        self.remove_button.setEnabled(False)
-        self.remove_button.setFixedHeight(24)
-
         status_bar.addWidget(self.gpu_label)
         status_bar.addWidget(self.ai_status_label)
         status_bar.addStretch()
-        status_bar.addWidget(self.remove_button)
+
         bottom_layout.addLayout(status_bar)
 
         self.splitter.addWidget(bottom_widget)
@@ -115,7 +127,7 @@ class MainWindow(QMainWindow):
         self.video_player.play_clicked.connect(self.controller.play)
         self.video_player.pause_clicked.connect(self.controller.pause)
         self.video_player.stop_clicked.connect(self.controller.stop)
-        self.remove_button.clicked.connect(self.start_background_removal)
+        self.video_player.remove_bg_clicked.connect(self.start_background_removal)
 
         self.video_player.next_frame_clicked.connect(self.controller.next_frame)
         self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
@@ -156,23 +168,18 @@ class MainWindow(QMainWindow):
         self.backspace_shortcut.activated.connect(self.delete_timeline_clip)
 
         # -- Global keyboard playback controls (JKL / Space) ------------
-        # Space: toggle play/pause. Context=Qt.ShortcutContext.ApplicationShortcut
-        # ensures it works regardless of which widget has focus.
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self.space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.space_shortcut.activated.connect(self._toggle_playback)
 
-        # J: reverse playback
         self.j_shortcut = QShortcut(QKeySequence(Qt.Key.Key_J), self)
         self.j_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.j_shortcut.activated.connect(self._play_reverse)
 
-        # K: pause (same as Space when playing)
         self.k_shortcut = QShortcut(QKeySequence(Qt.Key.Key_K), self)
         self.k_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.k_shortcut.activated.connect(self._pause_playback)
 
-        # L: forward playback
         self.l_shortcut = QShortcut(QKeySequence(Qt.Key.Key_L), self)
         self.l_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.l_shortcut.activated.connect(self._play_forward)
@@ -217,16 +224,16 @@ class MainWindow(QMainWindow):
         self.timeline_editor.set_fps(info["FPS"])
 
         if self.controller.background_removal_active:
-            self.remove_button.setText("Background Removal Active")
-            self.remove_button.setEnabled(False)
+            self.video_player.set_remove_bg_text("Background Removal Active")
+            self.video_player.set_remove_bg_enabled(False)
             self.ai_status_label.setText("Background removal active")
         elif self.controller.background_removal_available:
-            self.remove_button.setText("Remove Background")
-            self.remove_button.setEnabled(True)
+            self.video_player.set_remove_bg_text("Remove Background")
+            self.video_player.set_remove_bg_enabled(True)
             self.ai_status_label.setText(self.controller.background_removal_status)
         else:
-            self.remove_button.setText("Background Removal Unavailable")
-            self.remove_button.setEnabled(False)
+            self.video_player.set_remove_bg_text("Background Removal Unavailable")
+            self.video_player.set_remove_bg_enabled(False)
             self.ai_status_label.setText(self.controller.background_removal_status)
 
     def start_background_removal(self):
@@ -237,8 +244,8 @@ class MainWindow(QMainWindow):
             return
 
         self.video_player.show_processed_preview()
-        self.remove_button.setText("Background Removal Active")
-        self.remove_button.setEnabled(False)
+        self.video_player.set_remove_bg_text("Background Removal Active")
+        self.video_player.set_remove_bg_enabled(False)
         self.ai_status_label.setText("Background removal active ? processed preview is full-screen")
         self.video_player.set_status("AI processing started")
 
