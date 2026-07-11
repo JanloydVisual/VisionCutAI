@@ -21,7 +21,6 @@ class AppController:
         self._background_removal_processor = None
         self.background_removal_active = False
         self.background_removal_error = None
-        self.frames_sent_to_processing = 0
 
         self.video.frame_ready.connect(self._process_frame)
 
@@ -63,7 +62,6 @@ class AppController:
     def _process_frame(self, frame):
         """Sends playback frames to the AI pipeline after activation."""
         if self.background_removal_active:
-            self.frames_sent_to_processing += 1
             self.processing.enqueue_frame(frame)
 
     def open_video(self, filepath):
@@ -93,31 +91,6 @@ class AppController:
 
     def selected_clip(self):
         return self.project.timeline.get_selected_clip()
-
-    def select_clip(self, clip):
-        return self.project.timeline.select_clip(clip)
-
-    def move_clip(self, clip, timeline_start_frame):
-        return self.project.timeline.move_clip(clip, timeline_start_frame)
-
-    def trim_clip(self, clip, edge, timeline_frame):
-        if edge == "start":
-            return self.project.timeline.trim_clip_start(clip, timeline_frame)
-        if edge == "end":
-            return self.project.timeline.trim_clip_end(clip, timeline_frame)
-        return False
-
-    def split_selected_clip_at_playhead(self):
-        clip = self.selected_clip()
-        if clip is None:
-            return False
-        return self.project.timeline.split_clip(
-            clip,
-            self.video.current_frame_index,
-        )
-
-    def delete_selected_clip(self):
-        return self.project.timeline.delete_selected_clip()
 
     def release(self):
         self.video.release()

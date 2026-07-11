@@ -1,4 +1,4 @@
-from core.project import Project
+﻿from core.project import Project
 from core.video_engine import VideoEngine
 from core.processing_engine import ProcessingEngine
 from core.project_importer import ProjectImporter
@@ -6,7 +6,9 @@ from core.project_importer import ProjectImporter
 
 class AppController:
     """
-    Connects the GUI with application engines without importing PyQt6.
+    Connects the GUI with the application engines. Contains no
+    PyQt6 imports - this class is now portable Core layer code,
+    reusable by any future frontend.
     """
 
     def __init__(self):
@@ -20,8 +22,6 @@ class AppController:
 
         self._background_removal_processor = None
         self.background_removal_active = False
-        self.background_removal_error = None
-        self.frames_sent_to_processing = 0
 
         self.video.frame_ready.connect(self._process_frame)
 
@@ -30,40 +30,31 @@ class AppController:
     def _init_ai_processor(self):
         try:
             from ai.background_removal_processor import BackgroundRemovalProcessor
-
             processor = BackgroundRemovalProcessor()
             self._background_removal_processor = processor
             self.ai_device_label = processor.device_label
-        except Exception as error:
-            self.background_removal_error = str(error)
-            self.ai_device_label = "AI unavailable"
+        except Exception:
+            self.ai_device_label = "AI unavailable (passthrough active)"
 
     @property
     def background_removal_available(self):
         return self._background_removal_processor is not None
 
-    @property
-    def background_removal_status(self):
-        if self.background_removal_available:
-            return f"Background removal ready ({self.ai_device_label})"
-        return self.background_removal_error or "Background removal is unavailable"
-
     def start_background_removal(self):
-        """Activates AI processing and processes the current preview frame."""
+        """Activates AI processing for playback and previews the current frame."""
         if not self.video.is_loaded or not self.background_removal_available:
             return False
 
         self.processing.set_processor(self._background_removal_processor)
         self.background_removal_active = True
 
-        # Re-emit the current frame for an immediate processed preview.
+        # Re-emit the current frame so users see the result immediately.
         self.video.seek(self.video.current_frame_index)
         return True
 
     def _process_frame(self, frame):
-        """Sends playback frames to the AI pipeline after activation."""
+        """Sends playback frames to the AI pipeline after it is activated."""
         if self.background_removal_active:
-            self.frames_sent_to_processing += 1
             self.processing.enqueue_frame(frame)
 
     def open_video(self, filepath):
@@ -93,31 +84,6 @@ class AppController:
 
     def selected_clip(self):
         return self.project.timeline.get_selected_clip()
-
-    def select_clip(self, clip):
-        return self.project.timeline.select_clip(clip)
-
-    def move_clip(self, clip, timeline_start_frame):
-        return self.project.timeline.move_clip(clip, timeline_start_frame)
-
-    def trim_clip(self, clip, edge, timeline_frame):
-        if edge == "start":
-            return self.project.timeline.trim_clip_start(clip, timeline_frame)
-        if edge == "end":
-            return self.project.timeline.trim_clip_end(clip, timeline_frame)
-        return False
-
-    def split_selected_clip_at_playhead(self):
-        clip = self.selected_clip()
-        if clip is None:
-            return False
-        return self.project.timeline.split_clip(
-            clip,
-            self.video.current_frame_index,
-        )
-
-    def delete_selected_clip(self):
-        return self.project.timeline.delete_selected_clip()
 
     def release(self):
         self.video.release()

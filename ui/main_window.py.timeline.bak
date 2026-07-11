@@ -89,11 +89,6 @@ class MainWindow(QMainWindow):
         self.video_player.frame_scrubbed.connect(self.controller.seek)
 
         self.timeline_editor.seek_requested.connect(self.controller.seek)
-        self.timeline_editor.clip_selected.connect(self.select_timeline_clip)
-        self.timeline_editor.clip_move_requested.connect(self.move_timeline_clip)
-        self.timeline_editor.clip_trim_requested.connect(self.trim_timeline_clip)
-        self.timeline_editor.split_requested.connect(self.split_timeline_clip)
-        self.timeline_editor.delete_requested.connect(self.delete_timeline_clip)
 
         engine = self.controller.video
         engine.video_loaded.connect(self.video_loaded)
@@ -153,32 +148,6 @@ class MainWindow(QMainWindow):
         self.remove_button.setEnabled(False)
         self.ai_status_label.setText("Background removal active ? processed preview is full-screen")
         self.video_player.set_status("AI processing started")
-
-    def select_timeline_clip(self, clip):
-        if self.controller.select_clip(clip):
-            self.timeline_editor.refresh()
-
-    def move_timeline_clip(self, clip, timeline_start_frame):
-        if self.controller.move_clip(clip, timeline_start_frame):
-            self.timeline_editor.refresh()
-
-    def trim_timeline_clip(self, clip, edge, timeline_frame):
-        if self.controller.trim_clip(clip, edge, timeline_frame):
-            self.timeline_editor.refresh()
-
-    def split_timeline_clip(self):
-        if self.controller.split_selected_clip_at_playhead():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Clip split at playhead")
-        else:
-            self.video_player.set_status("Select a clip and place the playhead inside it")
-
-    def delete_timeline_clip(self):
-        if self.controller.delete_selected_clip():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Selected clip deleted")
-        else:
-            self.video_player.set_status("No selected clip to delete")
 
     def update_preview(self, frame):
         self._last_original_shape = tuple(frame.shape)

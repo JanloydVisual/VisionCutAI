@@ -25,8 +25,6 @@ class MainWindow(QMainWindow):
 
         self.controller = AppController()
         self.processing_bridge = ProcessingBridge(self.controller.processing)
-        self._processed_frames_received = 0
-        self._last_original_shape = None
 
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
@@ -89,11 +87,6 @@ class MainWindow(QMainWindow):
         self.video_player.frame_scrubbed.connect(self.controller.seek)
 
         self.timeline_editor.seek_requested.connect(self.controller.seek)
-        self.timeline_editor.clip_selected.connect(self.select_timeline_clip)
-        self.timeline_editor.clip_move_requested.connect(self.move_timeline_clip)
-        self.timeline_editor.clip_trim_requested.connect(self.trim_timeline_clip)
-        self.timeline_editor.split_requested.connect(self.split_timeline_clip)
-        self.timeline_editor.delete_requested.connect(self.delete_timeline_clip)
 
         engine = self.controller.video
         engine.video_loaded.connect(self.video_loaded)
@@ -148,40 +141,12 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.video_player.show_processed_preview()
         self.remove_button.setText("Background Removal Active")
         self.remove_button.setEnabled(False)
-        self.ai_status_label.setText("Background removal active ? processed preview is full-screen")
-        self.video_player.set_status("AI processing started")
-
-    def select_timeline_clip(self, clip):
-        if self.controller.select_clip(clip):
-            self.timeline_editor.refresh()
-
-    def move_timeline_clip(self, clip, timeline_start_frame):
-        if self.controller.move_clip(clip, timeline_start_frame):
-            self.timeline_editor.refresh()
-
-    def trim_timeline_clip(self, clip, edge, timeline_frame):
-        if self.controller.trim_clip(clip, edge, timeline_frame):
-            self.timeline_editor.refresh()
-
-    def split_timeline_clip(self):
-        if self.controller.split_selected_clip_at_playhead():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Clip split at playhead")
-        else:
-            self.video_player.set_status("Select a clip and place the playhead inside it")
-
-    def delete_timeline_clip(self):
-        if self.controller.delete_selected_clip():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Selected clip deleted")
-        else:
-            self.video_player.set_status("No selected clip to delete")
+        self.ai_status_label.setText("Background removal active")
+        self.video_player.set_status("Background removal active")
 
     def update_preview(self, frame):
-        self._last_original_shape = tuple(frame.shape)
         pixmap = PreviewEngine.frame_to_pixmap(frame)
         self.video_player.load_frame(pixmap)
 
@@ -190,30 +155,8 @@ class MainWindow(QMainWindow):
         self.timeline_editor.set_playhead_frame(current_frame)
 
     def update_processed_frame(self, frame):
-        self._processed_frames_received += 1
-
         pixmap = self._frame_to_pixmap(frame)
         self.video_player.set_processed_frame(pixmap)
-
-        output_shape = tuple(frame.shape)
-        alpha_status = "no alpha channel"
-
-        if frame.ndim == 3 and frame.shape[2] == 4:
-            alpha = frame[:, :, 3]
-            transparent_pixels = int((alpha < 250).sum())
-            alpha_status = (
-                f"alpha {int(alpha.min())}-{int(alpha.max())}, "
-                f"transparent pixels: {transparent_pixels}"
-            )
-
-        if self._processed_frames_received <= 3 or self._processed_frames_received % 15 == 0:
-            self.video_player.set_status(
-                "AI preview | "
-                f"sent: {self.controller.frames_sent_to_processing} | "
-                f"received: {self._processed_frames_received} | "
-                f"input: {self._last_original_shape} | "
-                f"output: {output_shape} | {alpha_status}"
-            )
 
     @staticmethod
     def _frame_to_pixmap(frame):

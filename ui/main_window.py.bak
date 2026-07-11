@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import (
+﻿from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,9 +24,10 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.controller = AppController()
+
+        # The one Qt-specific bridge, created here in the UI layer
+        # - core/controller.py stays framework-independent.
         self.processing_bridge = ProcessingBridge(self.controller.processing)
-        self._processed_frames_received = 0
-        self._last_original_shape = None
 
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
@@ -34,7 +35,12 @@ class MainWindow(QMainWindow):
         self.build_ui()
         self.connect_signals()
 
+    # ----------------------------------------------------
+    # UI
+    # ----------------------------------------------------
+
     def build_ui(self):
+
         layout = QVBoxLayout()
 
         self.file_label = QLabel("No video selected")
@@ -53,6 +59,7 @@ class MainWindow(QMainWindow):
         self.timeline_editor.set_project(self.controller.project)
 
         gpu = GPUManager.get_gpu_info()
+
         gpu_text = (
             f"GPU : {gpu['name']}"
             if gpu["available"]
@@ -61,9 +68,6 @@ class MainWindow(QMainWindow):
 
         self.gpu_label = QLabel(gpu_text)
 
-        self.ai_status_label = QLabel(self.controller.background_removal_status)
-        self.ai_status_label.setWordWrap(True)
-
         self.remove_button = QPushButton("Remove Background")
         self.remove_button.setEnabled(False)
 
@@ -71,14 +75,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.video_player)
         layout.addWidget(self.timeline_editor)
         layout.addWidget(self.gpu_label)
-        layout.addWidget(self.ai_status_label)
         layout.addWidget(self.remove_button)
 
         container = QWidget()
         container.setLayout(layout)
+
         self.setCentralWidget(container)
 
+    # ----------------------------------------------------
+    # Signals
+    # ----------------------------------------------------
+
     def connect_signals(self):
+
         self.video_player.play_clicked.connect(self.controller.play)
         self.video_player.pause_clicked.connect(self.controller.pause)
         self.video_player.stop_clicked.connect(self.controller.stop)
@@ -89,19 +98,23 @@ class MainWindow(QMainWindow):
         self.video_player.frame_scrubbed.connect(self.controller.seek)
 
         self.timeline_editor.seek_requested.connect(self.controller.seek)
-        self.timeline_editor.clip_selected.connect(self.select_timeline_clip)
-        self.timeline_editor.clip_move_requested.connect(self.move_timeline_clip)
-        self.timeline_editor.clip_trim_requested.connect(self.trim_timeline_clip)
-        self.timeline_editor.split_requested.connect(self.split_timeline_clip)
-        self.timeline_editor.delete_requested.connect(self.delete_timeline_clip)
 
         engine = self.controller.video
+
         engine.video_loaded.connect(self.video_loaded)
         engine.frame_ready.connect(self.update_preview)
 
+        # Now goes through the bridge, not controller.processing
+        # directly - required now that ProcessingEngine emits from
+        # a background thread instead of a QThread-managed one.
         self.processing_bridge.frame_processed.connect(self.update_processed_frame)
 
+    # ----------------------------------------------------
+    # Video
+    # ----------------------------------------------------
+
     def open_video(self):
+
         filename, _ = QFileDialog.getOpenFileName(
             self,
             "Open Video",
@@ -119,8 +132,10 @@ class MainWindow(QMainWindow):
             self.timeline_editor.refresh()
 
     def video_loaded(self, info):
+
         self.video_player.set_video_info(
-            f"Loaded | {info['Width']} x {info['Height']} | "
+            f"Loaded | "
+            f"{info['Width']} x {info['Height']} | "
             f"{info['FPS']:.2f} FPS"
         )
 
@@ -131,89 +146,35 @@ class MainWindow(QMainWindow):
         if self.controller.background_removal_active:
             self.remove_button.setText("Background Removal Active")
             self.remove_button.setEnabled(False)
-            self.ai_status_label.setText("Background removal active")
         elif self.controller.background_removal_available:
             self.remove_button.setText("Remove Background")
             self.remove_button.setEnabled(True)
-            self.ai_status_label.setText(self.controller.background_removal_status)
         else:
             self.remove_button.setText("Background Removal Unavailable")
             self.remove_button.setEnabled(False)
-            self.ai_status_label.setText(self.controller.background_removal_status)
 
     def start_background_removal(self):
         if not self.controller.start_background_removal():
-            self.video_player.set_status(
-                self.controller.background_removal_status
-            )
+            self.video_player.set_status("Background removal is unavailable")
             return
 
-        self.video_player.show_processed_preview()
         self.remove_button.setText("Background Removal Active")
         self.remove_button.setEnabled(False)
-        self.ai_status_label.setText("Background removal active ? processed preview is full-screen")
-        self.video_player.set_status("AI processing started")
-
-    def select_timeline_clip(self, clip):
-        if self.controller.select_clip(clip):
-            self.timeline_editor.refresh()
-
-    def move_timeline_clip(self, clip, timeline_start_frame):
-        if self.controller.move_clip(clip, timeline_start_frame):
-            self.timeline_editor.refresh()
-
-    def trim_timeline_clip(self, clip, edge, timeline_frame):
-        if self.controller.trim_clip(clip, edge, timeline_frame):
-            self.timeline_editor.refresh()
-
-    def split_timeline_clip(self):
-        if self.controller.split_selected_clip_at_playhead():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Clip split at playhead")
-        else:
-            self.video_player.set_status("Select a clip and place the playhead inside it")
-
-    def delete_timeline_clip(self):
-        if self.controller.delete_selected_clip():
-            self.timeline_editor.refresh()
-            self.video_player.set_status("Selected clip deleted")
-        else:
-            self.video_player.set_status("No selected clip to delete")
+        self.video_player.set_status("Background removal active")
 
     def update_preview(self, frame):
-        self._last_original_shape = tuple(frame.shape)
+
         pixmap = PreviewEngine.frame_to_pixmap(frame)
         self.video_player.load_frame(pixmap)
 
         current_frame = self.controller.video.current_frame_index
+
         self.video_player.set_current_frame(current_frame)
         self.timeline_editor.set_playhead_frame(current_frame)
 
     def update_processed_frame(self, frame):
-        self._processed_frames_received += 1
-
         pixmap = self._frame_to_pixmap(frame)
         self.video_player.set_processed_frame(pixmap)
-
-        output_shape = tuple(frame.shape)
-        alpha_status = "no alpha channel"
-
-        if frame.ndim == 3 and frame.shape[2] == 4:
-            alpha = frame[:, :, 3]
-            transparent_pixels = int((alpha < 250).sum())
-            alpha_status = (
-                f"alpha {int(alpha.min())}-{int(alpha.max())}, "
-                f"transparent pixels: {transparent_pixels}"
-            )
-
-        if self._processed_frames_received <= 3 or self._processed_frames_received % 15 == 0:
-            self.video_player.set_status(
-                "AI preview | "
-                f"sent: {self.controller.frames_sent_to_processing} | "
-                f"received: {self._processed_frames_received} | "
-                f"input: {self._last_original_shape} | "
-                f"output: {output_shape} | {alpha_status}"
-            )
 
     @staticmethod
     def _frame_to_pixmap(frame):
@@ -225,6 +186,10 @@ class MainWindow(QMainWindow):
             return QPixmap.fromImage(image)
 
         return PreviewEngine.frame_to_pixmap(frame)
+
+    # ----------------------------------------------------
+    # Shutdown
+    # ----------------------------------------------------
 
     def closeEvent(self, event):
         self.controller.release()

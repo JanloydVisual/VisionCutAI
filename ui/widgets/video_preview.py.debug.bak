@@ -55,9 +55,6 @@ class VideoPreview(QWidget):
     def set_processed_frame(self, pixmap: QPixmap) -> None:
         self.viewer.set_processed_frame(pixmap)
 
-    def show_processed_preview(self) -> None:
-        self.viewer.show_processed_preview()
-
     def clear(self) -> None:
         self.viewer.clear()
 

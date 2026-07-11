@@ -116,7 +116,6 @@ class ViewerWidget(QGraphicsView):
 
         self._comparison_fraction = 0.5
         self._comparison_dragging = False
-        self._has_processed_frame = False
 
     # ---------------- Frame updates ----------------
 
@@ -132,12 +131,7 @@ class ViewerWidget(QGraphicsView):
         size_changed = new_size != self._last_frame_size
 
         self._original_item.setPixmap(pixmap)
-
-        # Before AI returns its first frame, mirror the original image.
-        # Afterwards, preserve the last processed image until the next
-        # processed frame arrives instead of overwriting it during playback.
-        if not self._has_processed_frame:
-            self._processed_item.setPixmap(pixmap)
+        self._processed_item.setPixmap(pixmap)
 
         if size_changed:
             self._scene.setSceneRect(QRectF(0, 0, new_size.width(), new_size.height()))
@@ -153,20 +147,13 @@ class ViewerWidget(QGraphicsView):
         if pixmap is None or pixmap.isNull():
             return
         self._processed_item.setPixmap(pixmap)
-        self._has_processed_frame = True
         self._processed_item.set_clip_fraction(self._comparison_fraction)
-
-    def show_processed_preview(self) -> None:
-        # A fraction of 0 displays the processed layer across the full viewer.
-        # Drag the divider right to compare it with the original image.
-        self._set_comparison_fraction(0.0)
 
     def clear(self) -> None:
         self._original_item.setPixmap(QPixmap())
         self._processed_item.setPixmap(QPixmap())
         self._last_frame_size = None
         self._zoom_factor = 1.0
-        self._has_processed_frame = False
         self.resetTransform()
 
     # ---------------- Zoom ----------------

@@ -67,9 +67,6 @@ class VideoPlayerWidget(QWidget):
     def set_processed_frame(self, pixmap: QPixmap) -> None:
         self.preview.set_processed_frame(pixmap)
 
-    def show_processed_preview(self) -> None:
-        self.preview.show_processed_preview()
-
     def clear(self) -> None:
         self.preview.clear()
         self.status_label.setText("Idle")
