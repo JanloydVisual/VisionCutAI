@@ -12,7 +12,8 @@ TRACK_START_Y = 40
 TRACK_LABEL_WIDTH = 140
 RULER_HEIGHT = 30
 TRIM_HANDLE_WIDTH = 8
-PLAYHEAD_HIT_TOLERANCE = 6
+PLAYHEAD_HANDLE_HALF_WIDTH = 8    # Half-width of the red handle (total 16px)
+PLAYHEAD_HANDLE_HEIGHT = 22        # Height of the clickable grab area at the top
 
 
 class TimelineCanvas(QWidget):
@@ -22,7 +23,7 @@ class TimelineCanvas(QWidget):
     clip_trim_requested = pyqtSignal(object, str, int)
     clip_edit_started = pyqtSignal()
     clip_edit_finished = pyqtSignal()
-    # New signals for professional editing
+    # Professional editing signals
     split_at_frame = pyqtSignal(int)
     playhead_dragged = pyqtSignal(int)
 
@@ -42,9 +43,10 @@ class TimelineCanvas(QWidget):
 
         # Playhead dragging
         self._dragging_playhead = False
+        self._hovering_playhead = False
 
         self.setMinimumSize(4000, 300)
-        self.setMouseTracking(False)
+        self.setMouseTracking(True)  # Enable mouse tracking for hover detection
         self._update_cursor()
 
     def set_blade_mode(self, enabled: bool) -> None:
@@ -52,7 +54,11 @@ class TimelineCanvas(QWidget):
         self._update_cursor()
 
     def _update_cursor(self) -> None:
-        if self.blade_mode:
+        if self._dragging_playhead:
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+        elif self._hovering_playhead:
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+        elif self.blade_mode:
             self.setCursor(QCursor(Qt.CursorShape.SplitHCursor))
         else:
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
@@ -93,10 +99,19 @@ class TimelineCanvas(QWidget):
     def _playhead_x(self):
         return TRACK_LABEL_WIDTH + self.playhead_frame * PIXELS_PER_FRAME
 
-    def _playhead_hit_test(self, x, y):
-        """Returns True if (x, y) is near the playhead line."""
+    def _playhead_handle_rect(self):
+        """QRect of the top red handle grab area."""
         phx = self._playhead_x()
-        return abs(x - phx) <= PLAYHEAD_HIT_TOLERANCE and y >= 0
+        return QRect(
+            phx - PLAYHEAD_HANDLE_HALF_WIDTH,
+            0,
+            PLAYHEAD_HANDLE_HALF_WIDTH * 2,
+            PLAYHEAD_HANDLE_HEIGHT,
+        )
+
+    def _playhead_hit_test(self, x, y):
+        """Returns True if (x, y) is inside the red playhead handle area (top of line)."""
+        return self._playhead_handle_rect().contains(x, y)
 
     # ------------------------------------------------------------------
     # Painting
@@ -186,15 +201,28 @@ class TimelineCanvas(QWidget):
 
             y += TRACK_HEIGHT + TRACK_GAP
 
-        # -- Playhead line (red, drawn on top) --
+        # -- Playhead: thin vertical red line down the entire height --
         playhead_x = self._playhead_x()
         painter.setPen(QPen(QColor(255, 60, 60), 2))
-        painter.drawLine(playhead_x, 0, playhead_x, self.height())
+        painter.drawLine(playhead_x, PLAYHEAD_HANDLE_HEIGHT, playhead_x, self.height())
 
-        # Small playhead handle at the top (for visual grab target)
+        # -- Playhead handle: prominent red grab handle at the top --
+        handle_rect = self._playhead_handle_rect()
         painter.setBrush(QColor(255, 60, 60))
-        painter.drawRect(playhead_x - PLAYHEAD_HIT_TOLERANCE, 0,
-                         PLAYHEAD_HIT_TOLERANCE * 2, 8)
+        painter.setPen(QPen(QColor(200, 40, 40), 1))
+        painter.drawRect(handle_rect)
+
+        # Draw a small triangle/arrow indicator inside the handle
+        painter.setPen(QPen(QColor(255, 200, 200), 1))
+        mid_x = handle_rect.center().x()
+        handle_top = handle_rect.top() + 4
+        handle_bottom = handle_rect.bottom() - 4
+        # Small arrow pointing down
+        for offset in range(3):
+            left = mid_x - 4 + offset * 3
+            right = mid_x + 4 - offset * 3
+            y_pos = handle_top + offset * 4
+            painter.drawLine(left, y_pos, right, y_pos)
 
     # ------------------------------------------------------------------
     # Hit testing
@@ -217,6 +245,43 @@ class TimelineCanvas(QWidget):
     # Mouse events
     # ------------------------------------------------------------------
 
+    def mouseMoveEvent(self, event: QMouseEvent):
+        x, y = int(event.position().x()), int(event.position().y())
+
+        # Playhead dragging has highest priority
+        if self._dragging_playhead:
+            target_frame = self._timeline_frame_at(x)
+            self.playhead_dragged.emit(target_frame)
+            event.accept()
+            return
+
+        # Hover detection for the playhead handle
+        was_hovering = self._hovering_playhead
+        self._hovering_playhead = self._playhead_hit_test(x, y) and x >= TRACK_LABEL_WIDTH
+        if was_hovering != self._hovering_playhead:
+            self._update_cursor()
+
+        if self.dragging_clip is None:
+            super().mouseMoveEvent(event)
+            return
+
+        timeline_frame = self._timeline_frame_at(event.position().x())
+
+        if self.drag_mode == "move":
+            frame_delta = int((event.position().x() - self.drag_start_x) / PIXELS_PER_FRAME)
+            self.clip_move_requested.emit(
+                self.dragging_clip,
+                max(0, self.drag_start_frame + frame_delta),
+            )
+        else:
+            self.clip_trim_requested.emit(
+                self.dragging_clip,
+                self.drag_mode,
+                timeline_frame,
+            )
+
+        event.accept()
+
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
@@ -224,17 +289,17 @@ class TimelineCanvas(QWidget):
         pos = event.position()
         x, y = int(pos.x()), int(pos.y())
 
-        # 1. Ruler click (seek)
-        if y <= RULER_HEIGHT and x >= TRACK_LABEL_WIDTH:
-            self.ruler_clicked.emit(self._timeline_frame_at(x))
+        # 1. Playhead drag: highest priority - only activates on the handle
+        if self._playhead_hit_test(x, y) and x >= TRACK_LABEL_WIDTH:
+            self._dragging_playhead = True
+            self._update_cursor()
+            self.playhead_dragged.emit(self._timeline_frame_at(x))
             event.accept()
             return
 
-        # 2. Playhead drag (has priority over clip selection)
-        if self._playhead_hit_test(x, y):
-            self._dragging_playhead = True
-            self._timeline_frame_at(x)
-            self.playhead_dragged.emit(self._timeline_frame_at(x))
+        # 2. Ruler click (seek)
+        if y <= RULER_HEIGHT and x >= TRACK_LABEL_WIDTH:
+            self.ruler_clicked.emit(self._timeline_frame_at(x))
             event.accept()
             return
 
@@ -249,7 +314,7 @@ class TimelineCanvas(QWidget):
         # 4. Normal clip interaction (select / move / trim)
         clip = self.find_clip_at(x, y)
         if clip is None:
-            # Click in empty space - also seek there
+            # Click in empty space - seek there
             if x >= TRACK_LABEL_WIDTH:
                 self.ruler_clicked.emit(self._timeline_frame_at(x))
             return super().mousePressEvent(event)
@@ -272,38 +337,11 @@ class TimelineCanvas(QWidget):
         self.update()
         event.accept()
 
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if self._dragging_playhead:
-            x = int(event.position().x())
-            target_frame = self._timeline_frame_at(x)
-            self.playhead_dragged.emit(target_frame)
-            event.accept()
-            return
-
-        if self.dragging_clip is None:
-            return super().mouseMoveEvent(event)
-
-        timeline_frame = self._timeline_frame_at(event.position().x())
-
-        if self.drag_mode == "move":
-            frame_delta = int((event.position().x() - self.drag_start_x) / PIXELS_PER_FRAME)
-            self.clip_move_requested.emit(
-                self.dragging_clip,
-                max(0, self.drag_start_frame + frame_delta),
-            )
-        else:
-            self.clip_trim_requested.emit(
-                self.dragging_clip,
-                self.drag_mode,
-                timeline_frame,
-            )
-
-        event.accept()
-
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
             if self._dragging_playhead:
                 self._dragging_playhead = False
+                self._update_cursor()
                 event.accept()
                 return
             if self.dragging_clip is not None:
