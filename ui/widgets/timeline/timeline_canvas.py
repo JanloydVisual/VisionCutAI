@@ -53,7 +53,6 @@ class TimelineCanvas(QWidget):
         )
 
         # ruler
-
         painter.fillRect(
             0,
             0,
@@ -179,7 +178,6 @@ class TimelineCanvas(QWidget):
             self.playhead_frame * PIXELS_PER_FRAME
         )
 
-
         painter.setPen(
             QPen(
                 QColor(255,60,60),
@@ -202,7 +200,7 @@ class TimelineCanvas(QWidget):
             pos = event.position()
 
 
-            # ruler click
+            # ruler seek
 
             if (
                 pos.y() <= RULER_HEIGHT
