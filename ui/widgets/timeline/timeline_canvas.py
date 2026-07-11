@@ -57,14 +57,14 @@ class TimelineCanvas(QWidget):
         self._update_cursor()
 
     def sizeHint(self):
-        """Return a desktop-friendly default size."""
+        """Return virtual timeline size for scroll area content."""
         from PyQt6.QtCore import QSize
-        return QSize(1000, 150)
+        return QSize(4000, 150)
 
     def minimumSizeHint(self):
-        """Compact height, reasonable width for normal windows."""
+        """Preferred virtual size: wide enough for scrolling, compact height."""
         from PyQt6.QtCore import QSize
-        return QSize(1000, 150)
+        return QSize(4000, 150)
 
     def set_blade_mode(self, enabled: bool) -> None:
         self.blade_mode = enabled
