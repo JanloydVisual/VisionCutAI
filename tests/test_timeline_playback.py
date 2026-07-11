@@ -2,14 +2,17 @@ import unittest
 
 from core.clip import Clip
 from core.edit_history import EditHistory
+from core.signals import Signal
 from core.timeline import Timeline
-from core.timeline_playback import TimelinePlayback
+from core.timeline_playback import TimelinePlayback, PlaybackPosition
 
 
 class FakeDecoder:
     def __init__(self):
         self.seek_calls = []
         self.current_frame = None
+        self.is_loaded = True
+        self.frame_ready = Signal()
 
     def seek(self, frame_index):
         self.current_frame = frame_index
@@ -112,6 +115,303 @@ class TimelinePlaybackTests(unittest.TestCase):
 
         self.assertTrue(history.redo(target))
         self.assertEqual(target.value, 5)
+
+    # ------------------------------------------------------------------
+    # New tests for TimelinePlayback coordinator
+    # ------------------------------------------------------------------
+
+    def test_seek_outside_clips_returns_none(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 4, 0))
+        playback = TimelinePlayback(timeline)
+
+        self.assertIsNone(playback.seek(10))
+
+    def test_seek_negative_frame_clamps_to_zero(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        position = playback.seek(-5)
+        self.assertEqual(position.timeline_frame, 0)
+        self.assertEqual(position.source_frame, 0)
+
+    def test_step_forward_advances_timeline_frame(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(3)
+        position = playback.step_forward()
+        self.assertEqual(position.timeline_frame, 4)
+        self.assertEqual(position.source_frame, 4)
+
+    def test_step_backward_retreats_timeline_frame(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(5)
+        position = playback.step_backward()
+        self.assertEqual(position.timeline_frame, 4)
+        self.assertEqual(position.source_frame, 4)
+
+    def test_step_forward_at_end_returns_none(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 2, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(2)
+        self.assertIsNone(playback.step_forward())
+
+    def test_step_backward_at_start_clamps_to_zero(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 2, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(0)
+        position = playback.step_backward()
+        self.assertEqual(position.timeline_frame, 0)
+        self.assertEqual(position.source_frame, 0)
+
+    def test_play_pause_stop_controls_state(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        self.assertFalse(playback.is_playing)
+
+        playback.play()
+        self.assertTrue(playback.is_playing)
+
+        playback.pause()
+        self.assertFalse(playback.is_playing)
+
+        playback.play()
+        self.assertTrue(playback.is_playing)
+
+        playback.stop()
+        self.assertFalse(playback.is_playing)
+        self.assertEqual(playback.current_timeline_frame, 0)
+
+    def test_stop_returns_to_first_playable_frame(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(5, 9, 10))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(12)
+        playback.stop()
+        self.assertEqual(playback.current_timeline_frame, 10)
+
+    def test_frame_ready_signal_emits_with_timeline_frame(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        received = []
+
+        def on_frame(frame, timeline_frame):
+            received.append((frame, timeline_frame))
+
+        playback.frame_ready.connect(on_frame)
+
+        # Simulate decoder emitting a frame
+        decoder.frame_ready.emit("frame_data")
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0], ("frame_data", 0))
+
+    def test_frame_ready_signal_after_seek(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        received = []
+
+        def on_frame(frame, timeline_frame):
+            received.append((frame, timeline_frame))
+
+        playback.frame_ready.connect(on_frame)
+
+        playback.seek(5)
+        # After seek, the decoder emits a frame via its own frame_ready
+        decoder.frame_ready.emit("frame_after_seek")
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0], ("frame_after_seek", 5))
+
+    def test_set_decoder_wires_new_decoder(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        playback = TimelinePlayback(timeline)
+
+        decoder = FakeDecoder()
+        playback.set_decoder(decoder)
+
+        received = []
+        playback.frame_ready.connect(lambda f, tf: received.append((f, tf)))
+
+        decoder.frame_ready.emit("new_decoder_frame")
+        self.assertEqual(len(received), 1)
+
+    def test_release_cleans_up(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.play()
+        playback.release()
+
+        self.assertFalse(playback.is_playing)
+        self.assertIsNone(playback.decoder)
+
+    def test_play_without_decoder_does_nothing(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        playback = TimelinePlayback(timeline)
+
+        # Should not raise
+        playback.play()
+        self.assertFalse(playback.is_playing)
+
+    def test_play_with_unloaded_decoder_does_nothing(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        decoder.is_loaded = False
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.play()
+        self.assertFalse(playback.is_playing)
+
+    def test_seek_without_decoder_still_updates_position(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        playback = TimelinePlayback(timeline)
+
+        position = playback.seek(5)
+        self.assertEqual(position.timeline_frame, 5)
+        self.assertEqual(position.source_frame, 5)
+        self.assertEqual(playback.current_timeline_frame, 5)
+
+    def test_playback_position_dataclass(self):
+        pos = PlaybackPosition(timeline_frame=10, source_frame=5, clip="test")
+        self.assertEqual(pos.timeline_frame, 10)
+        self.assertEqual(pos.source_frame, 5)
+        self.assertEqual(pos.clip, "test")
+
+    def test_playback_position_is_frozen(self):
+        pos = PlaybackPosition(timeline_frame=1, source_frame=1, clip=None)
+        with self.assertRaises(AttributeError):
+            pos.timeline_frame = 2
+
+    def test_get_fps_from_clips(self):
+        timeline = Timeline()
+        c = clip(0, 9, 0)
+        c.fps = 24.0
+        timeline.add_clip(c)
+        playback = TimelinePlayback(timeline)
+
+        self.assertEqual(playback._get_fps(), 24.0)
+
+    def test_get_fps_default_when_no_clips(self):
+        timeline = Timeline()
+        playback = TimelinePlayback(timeline)
+
+        self.assertEqual(playback._get_fps(), 30.0)
+
+    # ------------------------------------------------------------------
+    # Toggle / reverse playback
+    # ------------------------------------------------------------------
+
+    def test_toggle_playback_starts_and_stops(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        self.assertFalse(playback.is_playing)
+
+        playback.toggle_playback()
+        self.assertTrue(playback.is_playing)
+
+        playback.toggle_playback()
+        self.assertFalse(playback.is_playing)
+
+    def test_toggle_playback_resumes_from_current_position(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(5)
+        playback.toggle_playback()
+        self.assertTrue(playback.is_playing)
+        self.assertEqual(playback.current_timeline_frame, 5)
+
+        playback.toggle_playback()
+        self.assertFalse(playback.is_playing)
+        self.assertEqual(playback.current_timeline_frame, 5)
+
+    def test_play_reverse_sets_negative_direction(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.seek(5)
+        playback.play_reverse()
+        self.assertTrue(playback.is_playing)
+        self.assertEqual(playback._play_direction, -1)
+
+    def test_play_sets_forward_direction(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.play_reverse()
+        playback.play()
+        self.assertTrue(playback.is_playing)
+        self.assertEqual(playback._play_direction, 1)
+
+    def test_k_pauses_playback(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        decoder = FakeDecoder()
+        playback = TimelinePlayback(timeline, decoder)
+
+        playback.play()
+        self.assertTrue(playback.is_playing)
+
+        playback.pause()
+        self.assertFalse(playback.is_playing)
+
+    def test_toggle_playback_without_decoder_does_nothing(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        playback = TimelinePlayback(timeline)
+
+        playback.toggle_playback()
+        self.assertFalse(playback.is_playing)
+
+    def test_play_reverse_without_decoder_does_nothing(self):
+        timeline = Timeline()
+        timeline.add_clip(clip(0, 9, 0))
+        playback = TimelinePlayback(timeline)
+
+        playback.play_reverse()
+        self.assertFalse(playback.is_playing)
 
 
 if __name__ == "__main__":

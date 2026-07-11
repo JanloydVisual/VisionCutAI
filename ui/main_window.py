@@ -103,9 +103,13 @@ class MainWindow(QMainWindow):
             self.finish_timeline_edit
         )
 
-        engine = self.controller.video
-        engine.video_loaded.connect(self.video_loaded)
-        engine.frame_ready.connect(self.update_preview)
+        # Connect to the coordinator's signal which emits
+        # (frame, timeline_frame) instead of raw source frames.
+        self.controller.frame_ready.connect(self.update_preview)
+
+        # VideoEngine.video_loaded is still the source-of-truth for
+        # metadata after a file is opened.
+        self.controller.video.video_loaded.connect(self.video_loaded)
 
         self.processing_bridge.frame_processed.connect(self.update_processed_frame)
 
@@ -119,6 +123,40 @@ class MainWindow(QMainWindow):
         self.redo_shortcut.activated.connect(self.redo_timeline)
         self.delete_shortcut.activated.connect(self.delete_timeline_clip)
         self.backspace_shortcut.activated.connect(self.delete_timeline_clip)
+
+        # -- Global keyboard playback controls (JKL / Space) ------------
+        # Space: toggle play/pause. Context=Qt.ShortcutContext.ApplicationShortcut
+        # ensures it works regardless of which widget has focus.
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        self.space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.space_shortcut.activated.connect(self._toggle_playback)
+
+        # J: reverse playback
+        self.j_shortcut = QShortcut(QKeySequence(Qt.Key.Key_J), self)
+        self.j_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.j_shortcut.activated.connect(self._play_reverse)
+
+        # K: pause (same as Space when playing)
+        self.k_shortcut = QShortcut(QKeySequence(Qt.Key.Key_K), self)
+        self.k_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.k_shortcut.activated.connect(self._pause_playback)
+
+        # L: forward playback
+        self.l_shortcut = QShortcut(QKeySequence(Qt.Key.Key_L), self)
+        self.l_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.l_shortcut.activated.connect(self._play_forward)
+
+    def _toggle_playback(self):
+        self.controller.toggle_playback()
+
+    def _play_reverse(self):
+        self.controller.play_reverse()
+
+    def _pause_playback(self):
+        self.controller.pause()
+
+    def _play_forward(self):
+        self.controller.play()
 
     def open_video(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -213,14 +251,13 @@ class MainWindow(QMainWindow):
             self.timeline_editor.refresh()
             self.video_player.set_status("Timeline edit redone")
 
-    def update_preview(self, frame):
+    def update_preview(self, frame, timeline_frame):
         self._last_original_shape = tuple(frame.shape)
         pixmap = PreviewEngine.frame_to_pixmap(frame)
         self.video_player.load_frame(pixmap)
 
-        current_frame = self.controller.video.current_frame_index
-        self.video_player.set_current_frame(current_frame)
-        self.timeline_editor.set_playhead_frame(current_frame)
+        self.video_player.set_current_frame(timeline_frame)
+        self.timeline_editor.set_playhead_frame(timeline_frame)
 
     def update_processed_frame(self, frame):
         self._processed_frames_received += 1

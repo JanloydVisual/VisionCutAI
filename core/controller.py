@@ -3,6 +3,7 @@ from core.video_engine import VideoEngine
 from core.processing_engine import ProcessingEngine
 from core.project_importer import ProjectImporter
 from core.edit_history import EditHistory
+from core.timeline_playback import TimelinePlayback
 
 
 class AppController:
@@ -27,6 +28,18 @@ class AppController:
         self.history = EditHistory()
         self._edit_snapshot = None
 
+        # -- TimelinePlayback coordinator --------------------------------
+        self.timeline_playback = TimelinePlayback(
+            timeline=self.project.timeline,
+            decoder=self.video,
+        )
+
+        # Expose the coordinator's frame-ready signal so MainWindow
+        # gets (frame, timeline_frame) instead of just frame.
+        self.frame_ready = self.timeline_playback.frame_ready
+
+        # Keep the original VideoEngine.frame_ready connected for
+        # the background-removal pipeline (unchanged path).
         self.video.frame_ready.connect(self._process_frame)
 
         self._init_ai_processor()
@@ -61,7 +74,9 @@ class AppController:
         self.background_removal_active = True
 
         # Re-emit the current frame for an immediate processed preview.
-        self.video.seek(self.video.current_frame_index)
+        # Seek the timeline to the current position, which maps to the
+        # correct source frame via TimelinePlayback.
+        self.timeline_playback.seek(self.timeline_playback.current_timeline_frame)
         return True
 
     def _process_frame(self, frame):
@@ -75,25 +90,38 @@ class AppController:
         success = self.video.load_video(filepath)
         if not success:
             return False
+
+        # After loading, snap the timeline playhead to the first
+        # playable frame (which maps to source frame 0).
+        self.timeline_playback.seek(0)
         return info
 
+    def toggle_playback(self):
+        """Toggle between play and pause. Idempotent - safe to call repeatedly."""
+        self.timeline_playback.toggle_playback()
+
     def play(self):
-        self.video.play()
+        self.timeline_playback.play()
+
+    def play_reverse(self):
+        """Start reverse playback (J key)."""
+        self.timeline_playback.play_reverse()
 
     def pause(self):
-        self.video.pause()
+        self.timeline_playback.pause()
 
     def stop(self):
-        self.video.stop()
+        self.timeline_playback.stop()
 
     def next_frame(self):
-        self.video.next_frame()
+        self.timeline_playback.step_forward()
 
     def previous_frame(self):
-        self.video.previous_frame()
+        self.timeline_playback.step_backward()
 
     def seek(self, frame_index):
-        self.video.seek(frame_index)
+        """Seek to *frame_index* in timeline-frame space."""
+        self.timeline_playback.seek(frame_index)
 
     def selected_clip(self):
         return self.project.timeline.get_selected_clip()
@@ -142,7 +170,7 @@ class AppController:
         return self._timeline_command(
             lambda: self.project.timeline.split_clip(
                 clip,
-                self.video.current_frame_index,
+                self.timeline_playback.current_timeline_frame,
             )
         )
 
@@ -158,5 +186,6 @@ class AppController:
         return self.history.redo(self.project.timeline)
 
     def release(self):
+        self.timeline_playback.release()
         self.video.release()
         self.processing.stop()
