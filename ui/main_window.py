@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -38,21 +39,43 @@ class MainWindow(QMainWindow):
 
     def build_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
+        # -- Top bar (file label + browse) --
+        top_bar = QWidget()
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(8, 4, 8, 4)
         self.file_label = QLabel("No video selected")
-
         self.browse_button = QPushButton("Browse")
         self.browse_button.clicked.connect(self.open_video)
+        top_layout.addWidget(self.file_label)
+        top_layout.addStretch()
+        top_layout.addWidget(self.browse_button)
+        layout.addWidget(top_bar)
 
-        top = QHBoxLayout()
-        top.addWidget(self.file_label)
-        top.addStretch()
-        top.addWidget(self.browse_button)
+        # -- Vertical splitter: preview (top) / timeline + info (bottom) --
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.setHandleWidth(6)
+        self.splitter.setChildrenCollapsible(False)
 
+        # Top section: video player (preview + controls + scrub bar)
         self.video_player = VideoPlayerWidget()
+        self.splitter.addWidget(self.video_player)
+
+        # Bottom section: timeline editor + status info
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(2)
 
         self.timeline_editor = TimelineEditor()
         self.timeline_editor.set_project(self.controller.project)
+        bottom_layout.addWidget(self.timeline_editor, stretch=1)
+
+        # Status bar below timeline
+        status_bar = QHBoxLayout()
+        status_bar.setContentsMargins(8, 2, 8, 4)
 
         gpu = GPUManager.get_gpu_info()
         gpu_text = (
@@ -60,21 +83,29 @@ class MainWindow(QMainWindow):
             if gpu["available"]
             else "GPU : Not Available"
         )
-
         self.gpu_label = QLabel(gpu_text)
+        self.gpu_label.setStyleSheet("color: #888; font-size: 11px;")
 
         self.ai_status_label = QLabel(self.controller.background_removal_status)
         self.ai_status_label.setWordWrap(True)
+        self.ai_status_label.setStyleSheet("color: #888; font-size: 11px;")
 
         self.remove_button = QPushButton("Remove Background")
         self.remove_button.setEnabled(False)
+        self.remove_button.setFixedHeight(24)
 
-        layout.addLayout(top)
-        layout.addWidget(self.video_player)
-        layout.addWidget(self.timeline_editor)
-        layout.addWidget(self.gpu_label)
-        layout.addWidget(self.ai_status_label)
-        layout.addWidget(self.remove_button)
+        status_bar.addWidget(self.gpu_label)
+        status_bar.addWidget(self.ai_status_label)
+        status_bar.addStretch()
+        status_bar.addWidget(self.remove_button)
+        bottom_layout.addLayout(status_bar)
+
+        self.splitter.addWidget(bottom_widget)
+
+        # Initial 70/30 split
+        self.splitter.setSizes([490, 210])
+
+        layout.addWidget(self.splitter, stretch=1)
 
         container = QWidget()
         container.setLayout(layout)
