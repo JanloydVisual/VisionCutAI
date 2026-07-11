@@ -52,7 +52,7 @@ class TimelineCanvas(QWidget):
         self._blade_preview_frame = -1  # -1 = not visible
         self._blade_mouse_y = 0
 
-        self.setMinimumSize(4000, 300)
+        self.setMinimumSize(4000, 150)
         self.setMouseTracking(True)
         self._update_cursor()
 
@@ -220,17 +220,7 @@ class TimelineCanvas(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(36, 36, 36))
 
-        # -- Ruler area --
-        painter.fillRect(0, 0, self.width(), RULER_HEIGHT, QColor(48, 48, 48))
-        painter.fillRect(0, 0, TRACK_LABEL_WIDTH, RULER_HEIGHT, QColor(38, 38, 38))
-        painter.setPen(QPen(QColor(80, 80, 80), 1))
-        painter.drawLine(TRACK_LABEL_WIDTH, 0, TRACK_LABEL_WIDTH, RULER_HEIGHT)
-
-        painter.setPen(QPen(QColor(110, 110, 110)))
-        for x in range(TRACK_LABEL_WIDTH, self.width(), 100):
-            painter.drawLine(x, 0, x, RULER_HEIGHT)
-            frame = (x - TRACK_LABEL_WIDTH) / PIXELS_PER_FRAME
-            painter.drawText(x + 4, 20, f"{int(frame / self.fps):02}")
+        # Note: Ruler is now drawn by TimelineRuler widget above the scroll area
 
         if self.timeline is None:
             return

@@ -114,8 +114,9 @@ class MainWindow(QMainWindow):
 
         self.splitter.addWidget(bottom_widget)
 
-        # Initial 70/30 split
-        self.splitter.setSizes([490, 210])
+        # Let the splitter manage proportional sizing (preview ~65%, timeline ~35%)
+        self.splitter.setStretchFactor(0, 65)
+        self.splitter.setStretchFactor(1, 35)
 
         layout.addWidget(self.splitter, stretch=1)
 

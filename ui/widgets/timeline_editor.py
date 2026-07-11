@@ -14,6 +14,7 @@ from ui.widgets.timeline.timeline_canvas import (
     TRACK_LABEL_WIDTH,
     PIXELS_PER_FRAME,
 )
+from ui.widgets.timeline.timeline_ruler import TimelineRuler
 
 
 class TimelineEditor(QWidget):
@@ -49,6 +50,11 @@ class TimelineEditor(QWidget):
         toolbar.addStretch(1)
         root.addLayout(toolbar)
 
+        # -- Fixed ruler (stays visible while scrolling) --
+        self.ruler = TimelineRuler()
+        root.addWidget(self.ruler)
+
+        # -- Scrollable canvas area --
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -61,6 +67,11 @@ class TimelineEditor(QWidget):
 
         body.addWidget(self.scroll)
         root.addLayout(body)
+
+        # Sync ruler with horizontal scroll
+        self.scroll.horizontalScrollBar().valueChanged.connect(
+            self.ruler.set_scroll_offset
+        )
 
         # Let the parent QSplitter control height; the timeline
         # can shrink but still gets a reasonable default share.
@@ -87,6 +98,7 @@ class TimelineEditor(QWidget):
 
     def set_fps(self, fps):
         self.canvas.set_fps(fps)
+        self.ruler.set_fps(fps)
 
     def refresh(self):
         self.canvas.refresh()
