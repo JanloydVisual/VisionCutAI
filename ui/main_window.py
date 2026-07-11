@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import (
+﻿from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
+        self.setMinimumSize(900, 600)
 
         self.build_ui()
         self.connect_signals()
@@ -193,7 +194,7 @@ class MainWindow(QMainWindow):
         self.space_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.space_shortcut.activated.connect(self._toggle_playback)
 
-        # J: reverse playback (cycle speed: -1x → -2x → -4x)
+        # J: reverse playback (cycle speed: -1x â†’ -2x â†’ -4x)
         self.j_shortcut = QShortcut(QKeySequence(Qt.Key.Key_J), self)
         self.j_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.j_shortcut.activated.connect(self._increase_reverse_speed)
@@ -203,7 +204,7 @@ class MainWindow(QMainWindow):
         self.k_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.k_shortcut.activated.connect(self._pause_and_reset_speed)
 
-        # L: forward playback (cycle speed: 1x → 2x → 4x)
+        # L: forward playback (cycle speed: 1x â†’ 2x â†’ 4x)
         self.l_shortcut = QShortcut(QKeySequence(Qt.Key.Key_L), self)
         self.l_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.l_shortcut.activated.connect(self._increase_forward_speed)
@@ -219,11 +220,11 @@ class MainWindow(QMainWindow):
         self.controller.toggle_playback()
 
     def _increase_forward_speed(self):
-        """L key: cycle forward speed 1x → 2x → 4x."""
+        """L key: cycle forward speed 1x â†’ 2x â†’ 4x."""
         self.controller.increase_forward_speed()
 
     def _increase_reverse_speed(self):
-        """J key: cycle reverse speed -1x → -2x → -4x."""
+        """J key: cycle reverse speed -1x â†’ -2x â†’ -4x."""
         self.controller.increase_reverse_speed()
 
     def _pause_and_reset_speed(self):

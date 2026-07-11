@@ -1,8 +1,9 @@
-from PyQt6.QtWidgets import (
+﻿from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QScrollArea,
+    QAbstractScrollArea,
     QPushButton,
     QLabel,
     QSizePolicy,
@@ -15,6 +16,7 @@ from ui.widgets.timeline.timeline_canvas import (
     PIXELS_PER_FRAME,
 )
 from ui.widgets.timeline.timeline_ruler import TimelineRuler
+from ui.widgets.timeline.track_header import TrackHeaderColumn
 
 
 class TimelineEditor(QWidget):
@@ -26,7 +28,6 @@ class TimelineEditor(QWidget):
     clip_trim_requested = pyqtSignal(object, str, int)
     clip_edit_started = pyqtSignal()
     clip_edit_finished = pyqtSignal()
-    # Professional editing signals
     split_at_frame = pyqtSignal(int)
     playhead_dragged = pyqtSignal(int)
     blade_preview_frame = pyqtSignal(int)
@@ -46,35 +47,45 @@ class TimelineEditor(QWidget):
         self.delete_button = QPushButton("Delete Selected")
         toolbar.addWidget(self.split_button)
         toolbar.addWidget(self.delete_button)
-        toolbar.addWidget(QLabel("Drag clips to move ? drag yellow edges to trim"))
+        toolbar.addWidget(QLabel("Drag clips to move - drag yellow edges to trim"))
         toolbar.addStretch(1)
         root.addLayout(toolbar)
 
-        # -- Fixed ruler (stays visible while scrolling) --
+        # Ruler row: a spacer matches the header column width so the
+        # ruler's time markings line up with the scrollable canvas,
+        # not the fixed header.
+        ruler_row = QHBoxLayout()
+        ruler_row.setContentsMargins(0, 0, 0, 0)
+        ruler_row.setSpacing(0)
+        ruler_spacer = QWidget()
+        ruler_spacer.setFixedWidth(TRACK_LABEL_WIDTH)
         self.ruler = TimelineRuler()
-        root.addWidget(self.ruler)
+        ruler_row.addWidget(ruler_spacer)
+        ruler_row.addWidget(self.ruler)
+        root.addLayout(ruler_row)
 
-        # -- Scrollable canvas area --
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
+        self.header = TrackHeaderColumn()
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
+        self.scroll.setMinimumWidth(200)
+        self.scroll.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
 
         self.canvas = TimelineCanvas()
         self.scroll.setWidget(self.canvas)
 
+        body.addWidget(self.header)
         body.addWidget(self.scroll)
         root.addLayout(body)
 
-        # Sync ruler with horizontal scroll
         self.scroll.horizontalScrollBar().valueChanged.connect(
             self.ruler.set_scroll_offset
         )
 
-        # Let the parent QSplitter control height; the timeline
-        # can shrink but still gets a reasonable default share.
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMinimumHeight(90)
 
@@ -95,6 +106,7 @@ class TimelineEditor(QWidget):
         self.project = project
         if project:
             self.canvas.set_timeline(project.timeline)
+            self.header.set_timeline(project.timeline)
 
     def set_fps(self, fps):
         self.canvas.set_fps(fps)
@@ -102,6 +114,7 @@ class TimelineEditor(QWidget):
 
     def refresh(self):
         self.canvas.refresh()
+        self.header.update()
 
     def set_blade_mode(self, enabled: bool) -> None:
         self.canvas.set_blade_mode(enabled)

@@ -1,4 +1,4 @@
-"""
+﻿"""
 TimelineRuler
 -------------
 Fixed timeline ruler that stays visible while the canvas scrolls.
@@ -29,7 +29,6 @@ class TimelineRuler(QWidget):
         self._scroll_offset = 0  # Horizontal scroll offset from QScrollArea
 
         self.setFixedHeight(RULER_HEIGHT)
-        self.setMinimumWidth(4000)
 
         # Styling
         self.setStyleSheet("background-color: #303030;")
