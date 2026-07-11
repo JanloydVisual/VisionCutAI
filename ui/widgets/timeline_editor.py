@@ -76,7 +76,7 @@ class TimelineEditor(QWidget):
         # Let the parent QSplitter control height; the timeline
         # can shrink but still gets a reasonable default share.
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(90)
 
         self.split_button.clicked.connect(self.split_requested.emit)
         self.delete_button.clicked.connect(self.delete_requested.emit)
