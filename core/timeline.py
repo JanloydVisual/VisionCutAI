@@ -77,6 +77,58 @@ class Timeline:
     def get_selected_clip(self):
         return self.selected_clip
 
+    def clip_at_timeline_frame(self, timeline_frame: int):
+        timeline_frame = int(timeline_frame)
+
+        for clip in sorted(
+            self.clips,
+            key=lambda item: item.timeline_start_frame,
+        ):
+            if clip.timeline_start_frame <= timeline_frame <= clip.timeline_end_frame:
+                return clip
+
+        return None
+
+    def next_playable_frame(self, timeline_frame: int):
+        timeline_frame = int(timeline_frame)
+
+        if self.clip_at_timeline_frame(timeline_frame) is not None:
+            return timeline_frame
+
+        for clip in sorted(
+            self.clips,
+            key=lambda item: item.timeline_start_frame,
+        ):
+            if clip.timeline_end_frame >= timeline_frame:
+                return max(timeline_frame, clip.timeline_start_frame)
+
+        return None
+
+    def previous_playable_frame(self, timeline_frame: int):
+        timeline_frame = int(timeline_frame)
+
+        if self.clip_at_timeline_frame(timeline_frame) is not None:
+            return timeline_frame
+
+        for clip in sorted(
+            self.clips,
+            key=lambda item: item.timeline_start_frame,
+            reverse=True,
+        ):
+            if clip.timeline_start_frame <= timeline_frame:
+                return min(timeline_frame, clip.timeline_end_frame)
+
+        return None
+
+    def total_timeline_duration(self):
+        if not self.clips:
+            return 0
+
+        return max(
+            clip.timeline_end_frame
+            for clip in self.clips
+        ) + 1
+
     def move_clip(self, clip: Clip, timeline_start_frame: int):
         if self._track_for_clip(clip) is None:
             return False
