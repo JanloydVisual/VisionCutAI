@@ -1,0 +1,226 @@
+from typing import List
+
+from .clip import Clip
+from .track import Track
+
+
+class Timeline:
+    """
+    Owns all timeline edits. This central mutation point is the seam
+    for a future undo/redo command history.
+    """
+
+    def __init__(self):
+        self.tracks: List[Track] = [
+            Track("Video Track 1", "video"),
+            Track("Audio Track 1", "audio"),
+        ]
+        self.selected_clip: Clip | None = None
+        self.revision = 0
+
+    @property
+    def clips(self):
+        return self.video_tracks[0].clips
+
+    @property
+    def video_tracks(self):
+        return [track for track in self.tracks if track.track_type == "video"]
+
+    @property
+    def audio_tracks(self):
+        return [track for track in self.tracks if track.track_type == "audio"]
+
+    def _track_for_clip(self, clip):
+        for track in self.tracks:
+            if clip in track.clips:
+                return track
+        return None
+
+    @staticmethod
+    def _sync_duration(clip):
+        clip.duration = clip.frame_count / clip.fps if clip.fps > 0 else 0
+
+    def _changed(self):
+        # Future undo/redo can record snapshots/commands here.
+        self.revision += 1
+
+    def add_clip(self, clip: Clip):
+        self.video_tracks[0].add_clip(clip)
+        if self.selected_clip is None:
+            self.selected_clip = clip
+        self._changed()
+
+    def remove_clip(self, clip: Clip):
+        track = self._track_for_clip(clip)
+        if track is None:
+            return False
+
+        track.remove_clip(clip)
+
+        if self.selected_clip == clip:
+            self.selected_clip = self.clips[0] if self.clips else None
+
+        self._changed()
+        return True
+
+    def delete_selected_clip(self):
+        if self.selected_clip is None:
+            return False
+        return self.remove_clip(self.selected_clip)
+
+    def select_clip(self, clip: Clip):
+        if self._track_for_clip(clip) is None:
+            return False
+        self.selected_clip = clip
+        return True
+
+    def get_selected_clip(self):
+        return self.selected_clip
+
+    def move_clip(self, clip: Clip, timeline_start_frame: int):
+        if self._track_for_clip(clip) is None:
+            return False
+
+        clip.timeline_start_frame = max(0, int(timeline_start_frame))
+        self.selected_clip = clip
+        self._changed()
+        return True
+
+    def trim_clip_start(self, clip: Clip, timeline_frame: int):
+        if self._track_for_clip(clip) is None:
+            return False
+
+        new_start = int(timeline_frame)
+
+        if new_start <= clip.timeline_start_frame:
+            return False
+        if new_start > clip.timeline_end_frame:
+            return False
+
+        removed_frames = new_start - clip.timeline_start_frame
+        clip.start_frame += removed_frames
+        clip.timeline_start_frame = new_start
+        self._sync_duration(clip)
+
+        self.selected_clip = clip
+        self._changed()
+        return True
+
+    def trim_clip_end(self, clip: Clip, timeline_frame: int):
+        if self._track_for_clip(clip) is None:
+            return False
+
+        new_end = int(timeline_frame)
+
+        if new_end < clip.timeline_start_frame:
+            return False
+        if new_end >= clip.timeline_end_frame:
+            return False
+
+        kept_frames = new_end - clip.timeline_start_frame + 1
+        clip.end_frame = clip.start_frame + kept_frames - 1
+        self._sync_duration(clip)
+
+        self.selected_clip = clip
+        self._changed()
+        return True
+
+    def split_clip(self, clip: Clip, timeline_frame: int):
+        track = self._track_for_clip(clip)
+        if track is None:
+            return False
+
+        split_frame = int(timeline_frame)
+
+        # The split point becomes the first frame of the right clip.
+        if split_frame <= clip.timeline_start_frame:
+            return False
+        if split_frame > clip.timeline_end_frame:
+            return False
+
+        offset = split_frame - clip.timeline_start_frame
+        original_end_frame = clip.end_frame
+
+        right_clip = Clip(
+            source_path=clip.source_path,
+            start_frame=clip.start_frame + offset,
+            end_frame=original_end_frame,
+            fps=clip.fps,
+            duration=0,
+            timeline_start_frame=split_frame,
+            background_removed=clip.background_removed,
+            effects=list(clip.effects),
+        )
+
+        clip.end_frame = right_clip.start_frame - 1
+        self._sync_duration(clip)
+        self._sync_duration(right_clip)
+
+        insert_index = track.clips.index(clip) + 1
+        track.clips.insert(insert_index, right_clip)
+
+        self.selected_clip = right_clip
+        self._changed()
+        return True
+
+    def snapshot(self):
+        clips = []
+        selected_index = None
+
+        for index, clip in enumerate(self.clips):
+            if clip == self.selected_clip:
+                selected_index = index
+
+            clips.append({
+                "source_path": clip.source_path,
+                "start_frame": clip.start_frame,
+                "end_frame": clip.end_frame,
+                "fps": clip.fps,
+                "duration": clip.duration,
+                "timeline_start_frame": clip.timeline_start_frame,
+                "background_removed": clip.background_removed,
+                "effects": list(clip.effects),
+            })
+
+        return {
+            "clips": clips,
+            "selected_index": selected_index,
+        }
+
+    def restore(self, snapshot):
+        restored_clips = [
+            Clip(
+                source_path=data["source_path"],
+                start_frame=data["start_frame"],
+                end_frame=data["end_frame"],
+                fps=data["fps"],
+                duration=data["duration"],
+                timeline_start_frame=data["timeline_start_frame"],
+                background_removed=data["background_removed"],
+                effects=list(data["effects"]),
+            )
+            for data in snapshot["clips"]
+        ]
+
+        self.video_tracks[0].clips = restored_clips
+
+        selected_index = snapshot.get("selected_index")
+        self.selected_clip = (
+            restored_clips[selected_index]
+            if selected_index is not None and selected_index < len(restored_clips)
+            else None
+        )
+
+        self._changed()
+
+    def clear(self):
+        for track in self.tracks:
+            track.clips.clear()
+        self.selected_clip = None
+        self._changed()
+
+    def __len__(self):
+        return len(self.clips)
+
+    def __iter__(self):
+        return iter(self.clips)
