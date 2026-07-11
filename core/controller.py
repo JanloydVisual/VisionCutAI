@@ -200,8 +200,14 @@ class AppController:
 
     def _timeline_command(self, action):
         if self._edit_snapshot is not None:
-            return action()
-        return self.history.execute(self.project.timeline, action)
+            result = action()
+        else:
+            result = self.history.execute(self.project.timeline, action)
+        
+        # Refresh the current preview to prevent stale frames after edits
+        self.preview_seek(self.timeline_playback.current_timeline_frame)
+        
+        return result
 
     def move_clip(self, clip, timeline_start_frame):
         return self._timeline_command(
