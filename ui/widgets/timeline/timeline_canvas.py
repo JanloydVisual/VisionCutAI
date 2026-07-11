@@ -52,9 +52,18 @@ class TimelineCanvas(QWidget):
         self._blade_preview_frame = -1  # -1 = not visible
         self._blade_mouse_y = 0
 
-        self.setMinimumSize(4000, 150)
+        self.setMinimumHeight(150)
         self.setMouseTracking(True)
         self._update_cursor()
+
+    def sizeHint(self):
+        """Return virtual timeline size for scroll area content."""
+        return self.minimumSizeHint()
+
+    def minimumSizeHint(self):
+        """Preferred virtual size: wide enough for scrolling, compact height."""
+        from PyQt6.QtCore import QSize
+        return QSize(4000, 150)
 
     def set_blade_mode(self, enabled: bool) -> None:
         self.blade_mode = enabled
