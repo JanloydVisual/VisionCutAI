@@ -1,30 +1,25 @@
 ﻿import cv2
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QTimer
+
+from core.signals import Signal
 
 
-class VideoEngine(QObject):
+class VideoEngine:
     """
     Handles video playback.
 
-    Responsibilities:
-    - Load video
-    - Play
-    - Pause
-    - Stop
-    - Step forward / backward by one frame
-    - Seek to an arbitrary frame (timeline scrubbing)
-    - Emit frames to the GUI
-
-    Does NOT know anything about buttons,
-    windows or labels.
+    Event system (frame_ready/video_loaded/playback_finished) is
+    now plain Signal objects - no Qt dependency. QTimer remains as
+    the playback clock: it never crosses threads, so it is not a
+    portability blocker, just an intentional Phase 1 choice to
+    revisit only if this class is ever run outside a Qt app.
     """
 
-    frame_ready = pyqtSignal(object)
-    video_loaded = pyqtSignal(dict)
-    playback_finished = pyqtSignal()
-
     def __init__(self):
-        super().__init__()
+
+        self.frame_ready = Signal()
+        self.video_loaded = Signal()
+        self.playback_finished = Signal()
 
         self.cap = None
 
@@ -37,7 +32,6 @@ class VideoEngine(QObject):
         self.fps = 30
         self.total_frames = 0
 
-        # Tracks the index of the frame currently on screen.
         self.current_frame_index = 0
 
     def load_video(self, filepath):
@@ -129,11 +123,6 @@ class VideoEngine(QObject):
         self._seek_and_show(target)
 
     def seek(self, frame_index):
-        """
-        Seeks to an arbitrary frame position (used by timeline
-        scrubbing). Pauses playback first and clamps to valid
-        bounds, same defensive pattern as next_frame/previous_frame.
-        """
 
         if not self.is_loaded:
             return

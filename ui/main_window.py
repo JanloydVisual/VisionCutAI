@@ -15,6 +15,7 @@ from core.gpu_manager import GPUManager
 from core.preview_engine import PreviewEngine
 from ui.widgets.video_player_widget import VideoPlayerWidget
 from ui.widgets.timeline_editor import TimelineEditor
+from ui.engine_bridge import ProcessingBridge
 
 
 class MainWindow(QMainWindow):
@@ -23,6 +24,10 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.controller = AppController()
+
+        # The one Qt-specific bridge, created here in the UI layer
+        # - core/controller.py stays framework-independent.
+        self.processing_bridge = ProcessingBridge(self.controller.processing)
 
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
@@ -91,8 +96,6 @@ class MainWindow(QMainWindow):
         self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
         self.video_player.frame_scrubbed.connect(self.controller.seek)
 
-        # Sprint 9: clicking the timeline ruler seeks the video,
-        # same controller.seek() the scrub bar already uses.
         self.timeline_editor.seek_requested.connect(self.controller.seek)
 
         engine = self.controller.video
@@ -100,7 +103,10 @@ class MainWindow(QMainWindow):
         engine.video_loaded.connect(self.video_loaded)
         engine.frame_ready.connect(self.update_preview)
 
-        self.controller.processing.frame_processed.connect(self.update_processed_frame)
+        # Now goes through the bridge, not controller.processing
+        # directly - required now that ProcessingEngine emits from
+        # a background thread instead of a QThread-managed one.
+        self.processing_bridge.frame_processed.connect(self.update_processed_frame)
 
     # ----------------------------------------------------
     # Video
@@ -134,9 +140,6 @@ class MainWindow(QMainWindow):
 
         self.video_player.set_controls_enabled(True)
         self.video_player.set_total_frames(info["Frames"], info["FPS"])
-
-        # Sprint 9: ruler labels/click-to-seek now use the real fps
-        # instead of a hardcoded 30.
         self.timeline_editor.set_fps(info["FPS"])
 
         self.remove_button.setEnabled(True)

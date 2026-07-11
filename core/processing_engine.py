@@ -1,84 +1,96 @@
 ﻿"""
 ProcessingEngine
 ----------------
-Reusable, UI-independent frame processing pipeline.
+Reusable, UI-independent frame processing pipeline. Pure Python -
+no Qt dependency at all, so this class (and any FrameProcessor it
+drives) can be reused unchanged by any future frontend or service,
+not just PyQt6.
 
-Receives raw frames (from VideoEngine.frame_ready), pushes them
-through a pluggable FrameProcessor, and emits the result via a Qt
-signal. Intended to run on a background QThread so processing
-never blocks the UI event loop.
-
-Uses a bounded queue with a "latest frame wins" strategy: if
-frames arrive faster than they can be processed, older pending
-frames are dropped rather than building an ever-growing backlog.
-This keeps real-time preview latency low and is the standard
-approach for real-time video pipelines under backpressure.
-
-Has ZERO knowledge of VideoEngine, VideoPlayerWidget, VideoPreview,
-or any other UI component - only frames and a FrameProcessor.
+Runs its own background thread (plain threading.Thread) so
+processing never blocks whichever thread calls enqueue_frame().
+Uses a bounded queue.Queue with "latest frame wins" semantics -
+same real-time-pipeline behavior as before, now framework-free.
 """
 
-from collections import deque
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+import threading
+import queue
 
 from core.frame_processor import FrameProcessor, PassthroughProcessor
+from core.signals import Signal
 
 
-class ProcessingEngine(QObject):
-
-    frame_processed = pyqtSignal(object)
+class ProcessingEngine:
 
     def __init__(self, processor: FrameProcessor = None, max_queue_size: int = 2):
-        super().__init__()
+
+        self.frame_processed = Signal()
 
         self._processor = processor or PassthroughProcessor()
-        self._queue = deque(maxlen=max_queue_size)
-        self._busy = False
+        self._queue = queue.Queue(maxsize=max_queue_size)
+        self._stop_event = threading.Event()
+        self._thread = None
 
     def set_processor(self, processor: FrameProcessor) -> None:
-        """
-        Swaps the active processor at runtime. This is the single
-        plug-in point future AI models attach to - nothing else in
-        this class, or anywhere upstream/downstream, needs to change.
-        """
         self._processor = processor
+
+    def start(self) -> None:
+        """Starts the background worker thread. Safe to call once."""
+        if self._thread is not None:
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signals the worker thread to stop and waits for it to exit."""
+        self._stop_event.set()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
 
     def enqueue_frame(self, frame) -> None:
         """
-        Slot: receives a raw frame. Safe to call via a cross-thread
-        signal connection - Qt automatically delivers it as a
-        queued call when emitter and receiver live on different
-        threads.
+        Called from the producing thread (VideoEngine, on the main
+        thread today). Keeps only the newest frame - if the queue
+        is full, the oldest pending frame is dropped.
         """
-        self._queue.append(frame)
-
-        if not self._busy:
-            # Defer instead of processing inline, so a burst of
-            # enqueue_frame calls can't stack up synchronously or
-            # block whatever called this slot.
-            QTimer.singleShot(0, self._process_next)
-
-    def _process_next(self) -> None:
-        if not self._queue:
-            self._busy = False
-            return
-
-        self._busy = True
-
-        # Always process the newest frame; discard anything older
-        # that piled up behind it.
-        frame = self._queue[-1]
-        self._queue.clear()
-
         try:
-            processed = self._processor.process(frame)
-        except Exception:
-            # A misbehaving processor must never break playback.
-            processed = frame
+            self._queue.put_nowait(frame)
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(frame)
+            except queue.Full:
+                pass
 
-        self.frame_processed.emit(processed)
+    def _run(self) -> None:
 
-        if self._queue:
-            QTimer.singleShot(0, self._process_next)
-        else:
-            self._busy = False
+        while not self._stop_event.is_set():
+
+            frame = self._queue.get()
+
+            if frame is None:
+                continue
+
+            # Drain to the newest frame if more piled up while busy.
+            while True:
+                try:
+                    newer = self._queue.get_nowait()
+                    if newer is not None:
+                        frame = newer
+                except queue.Empty:
+                    break
+
+            try:
+                processed = self._processor.process(frame)
+            except Exception:
+                processed = frame
+
+            self.frame_processed.emit(processed)
