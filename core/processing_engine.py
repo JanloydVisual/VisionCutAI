@@ -1,4 +1,4 @@
-﻿"""
+"""
 ProcessingEngine
 ----------------
 Reusable, UI-independent frame processing pipeline. Pure Python -
@@ -14,9 +14,14 @@ same real-time-pipeline behavior as before, now framework-free.
 
 import threading
 import queue
+import time
+import logging
 
 from core.frame_processor import FrameProcessor, PassthroughProcessor
 from core.signals import Signal
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
 class ProcessingEngine:
@@ -24,22 +29,38 @@ class ProcessingEngine:
     def __init__(self, processor: FrameProcessor = None, max_queue_size: int = 2):
 
         self.frame_processed = Signal()
+        self.telemetry_updated = Signal()
 
         self._processor = processor or PassthroughProcessor()
         self._queue = queue.Queue(maxsize=max_queue_size)
         self._stop_event = threading.Event()
         self._thread = None
+        
+        self._dropped_frames = 0
+        self._processed_frames = 0
+        self._last_log_time = time.time()
 
     def set_processor(self, processor: FrameProcessor) -> None:
         self._processor = processor
 
     def start(self) -> None:
         """Starts the background worker thread. Safe to call once."""
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
+        # Drain the queue to ensure a fresh start
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        self._dropped_frames = 0
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def set_model(self, model_name: str):
+        if hasattr(self._processor, 'set_model'):
+            self._processor.set_model(model_name)
 
     def stop(self) -> None:
         """Signals the worker thread to stop and waits for it to exit."""
@@ -63,6 +84,7 @@ class ProcessingEngine:
         except queue.Full:
             try:
                 self._queue.get_nowait()
+                self._dropped_frames += 1
             except queue.Empty:
                 pass
             try:
@@ -85,12 +107,29 @@ class ProcessingEngine:
                     newer = self._queue.get_nowait()
                     if newer is not None:
                         frame = newer
+                        self._dropped_frames += 1
                 except queue.Empty:
                     break
 
+            start_time = time.perf_counter()
             try:
                 processed = self._processor.process(frame)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Processing failed: {e}", exc_info=True)
                 processed = frame
+            latency_ms = (time.perf_counter() - start_time) * 1000
 
+            self._processed_frames += 1
+            now = time.time()
+            if now - self._last_log_time >= 5.0:
+                fps = self._processed_frames / (now - self._last_log_time)
+                h, w = frame.shape[:2]
+                logger.info(f"AI Engine | Source Frame: {w}x{h} | Latency: {latency_ms:.1f}ms | "
+                            f"Processed FPS: {fps:.1f} | Dropped Frames: {self._dropped_frames}")
+                
+                self._processed_frames = 0
+                self._dropped_frames = 0
+                self._last_log_time = now
+
+            self.telemetry_updated.emit({"latency_ms": latency_ms})
             self.frame_processed.emit(processed)

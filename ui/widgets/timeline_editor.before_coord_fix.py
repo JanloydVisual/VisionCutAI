@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import (
+﻿from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -18,18 +18,11 @@ from ui.widgets.timeline.timeline_canvas import (
 from ui.widgets.timeline.timeline_ruler import TimelineRuler
 from ui.widgets.timeline.track_header import TrackHeaderColumn
 
-# Purely visual gap between TrackHeaderColumn and the scrollable canvas.
-# This never touches frame/pixel math - it only widens the layout spacer
-# so the ruler stays lined up with the canvas it labels.
-HEADER_CANVAS_MARGIN = 6
-
 
 class TimelineEditor(QWidget):
     seek_requested = pyqtSignal(int)
     split_requested = pyqtSignal()
     delete_requested = pyqtSignal()
-    link_toggle_requested = pyqtSignal()
-    render_preview_requested = pyqtSignal()
     clip_selected = pyqtSignal(object)
     clip_move_requested = pyqtSignal(object, int)
     clip_trim_requested = pyqtSignal(object, str, int)
@@ -44,7 +37,6 @@ class TimelineEditor(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.project = None
-        self.zoom_factor = 1.0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -53,14 +45,8 @@ class TimelineEditor(QWidget):
         toolbar = QHBoxLayout()
         self.split_button = QPushButton("Split at Playhead")
         self.delete_button = QPushButton("Delete Selected")
-        self.link_toggle_button = QPushButton("Unlink")
-        self.render_preview_button = QPushButton("Render Preview")
-        self.render_preview_button.setStyleSheet("font-weight: bold; color: #4CAF50;")
-
         toolbar.addWidget(self.split_button)
         toolbar.addWidget(self.delete_button)
-        toolbar.addWidget(self.link_toggle_button)
-        toolbar.addWidget(self.render_preview_button)
         toolbar.addWidget(QLabel("Drag clips to move - drag yellow edges to trim"))
         toolbar.addStretch(1)
         root.addLayout(toolbar)
@@ -72,7 +58,7 @@ class TimelineEditor(QWidget):
         ruler_row.setContentsMargins(0, 0, 0, 0)
         ruler_row.setSpacing(0)
         ruler_spacer = QWidget()
-        ruler_spacer.setFixedWidth(TRACK_LABEL_WIDTH + HEADER_CANVAS_MARGIN)
+        ruler_spacer.setFixedWidth(TRACK_LABEL_WIDTH)
         self.ruler = TimelineRuler()
         ruler_row.addWidget(ruler_spacer)
         ruler_row.addWidget(self.ruler)
@@ -94,17 +80,11 @@ class TimelineEditor(QWidget):
 
         body.addWidget(self.header)
 
-        margin_spacer = QWidget()
-        margin_spacer.setFixedWidth(HEADER_CANVAS_MARGIN)
-        body.addWidget(margin_spacer)
-
         self.scroll.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
 
-        # Sane initial default before any project/tracks are loaded;
-        # _sync_scroll_height() overrides this once track data exists.
         self.scroll.setFixedHeight(170)
 
         body.addWidget(self.scroll)
@@ -124,12 +104,7 @@ class TimelineEditor(QWidget):
 
         self.split_button.clicked.connect(self.split_requested.emit)
         self.delete_button.clicked.connect(self.delete_requested.emit)
-        self.link_toggle_button.clicked.connect(self.link_toggle_requested.emit)
-        self.render_preview_button.clicked.connect(self.render_preview_requested.emit)
 
-        self.ruler.seek_requested.connect(self.seek_requested.emit)
-        self.ruler.playhead_dragged.connect(self.playhead_dragged.emit)
-        
         self.canvas.ruler_clicked.connect(self.seek_requested.emit)
         self.canvas.clip_selected.connect(self.clip_selected.emit)
         self.canvas.clip_move_requested.connect(self.clip_move_requested.emit)
@@ -137,6 +112,7 @@ class TimelineEditor(QWidget):
         self.canvas.clip_edit_started.connect(self.clip_edit_started.emit)
         self.canvas.clip_edit_finished.connect(self.clip_edit_finished.emit)
         self.canvas.split_at_frame.connect(self.split_at_frame.emit)
+        self.canvas.playhead_dragged.connect(self.playhead_dragged.emit)
         self.canvas.blade_preview_frame.connect(self.blade_preview_frame.emit)
 
     def set_project(self, project):
@@ -144,16 +120,6 @@ class TimelineEditor(QWidget):
         if project:
             self.canvas.set_timeline(project.timeline)
             self.header.set_timeline(project.timeline)
-            self._sync_scroll_height()
-
-    def set_render_cache(self, render_cache):
-        self.ruler.set_render_cache(render_cache)
-
-    def _sync_scroll_height(self):
-        # Keep the scroll viewport matched to the canvas's real content
-        # height (which now scales with track count) plus a small strip
-        # for the horizontal scrollbar, instead of a fixed magic number.
-        self.scroll.setFixedHeight(self.canvas.height() + 20)
 
     def set_fps(self, fps):
         self.canvas.set_fps(fps)
@@ -162,25 +128,16 @@ class TimelineEditor(QWidget):
     def refresh(self):
         self.canvas.refresh()
         self.header.update()
-        
-    def update_link_button_state(self, is_linked: bool):
-        if is_linked:
-            self.link_toggle_button.setText("Unlink")
-        else:
-            self.link_toggle_button.setText("Link")
 
     def set_blade_mode(self, enabled: bool) -> None:
         self.canvas.set_blade_mode(enabled)
 
     def set_playhead_frame(self, frame_index):
         self.canvas.set_playhead_frame(frame_index)
-        self.ruler.set_playhead_frame(frame_index)
-        if getattr(self.ruler, '_dragging_playhead', False):
-            return
         self._auto_scroll_to_playhead(frame_index)
 
     def _auto_scroll_to_playhead(self, frame_index):
-        playhead_x = frame_index * (2 * self.zoom_factor)
+        playhead_x = TRACK_LABEL_WIDTH + (frame_index * PIXELS_PER_FRAME)
 
         bar = self.scroll.horizontalScrollBar()
         viewport_width = self.scroll.viewport().width()
@@ -188,43 +145,6 @@ class TimelineEditor(QWidget):
         visible_right = visible_left + viewport_width
 
         if playhead_x < visible_left + self.AUTO_SCROLL_MARGIN:
-            bar.setValue(int(max(0, playhead_x - self.AUTO_SCROLL_MARGIN)))
+            bar.setValue(max(0, playhead_x - self.AUTO_SCROLL_MARGIN))
         elif playhead_x > visible_right - self.AUTO_SCROLL_MARGIN:
-            bar.setValue(int(playhead_x - viewport_width + self.AUTO_SCROLL_MARGIN))
-
-    def set_zoom(self, zoom: float):
-        self.zoom_factor = max(0.5, min(5.0, zoom))
-        
-        import ui.widgets.timeline.timeline_canvas as tc
-        import ui.widgets.timeline.timeline_ruler as tr
-        
-        scaled_ppf = 2 * self.zoom_factor
-        tc.PIXELS_PER_FRAME = scaled_ppf
-        tr.PIXELS_PER_FRAME = scaled_ppf
-        
-        if self.project:
-            self.canvas._sync_content_width()
-            self.refresh()
-            self._auto_scroll_to_playhead(self.canvas.playhead_frame)
-
-    def wheelEvent(self, event):
-        from PyQt6.QtCore import Qt
-        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            delta = event.angleDelta().y()
-            
-            bar = self.scroll.horizontalScrollBar()
-            viewport_width = self.scroll.viewport().width()
-            
-            center_frame = (bar.value() + viewport_width / 2.0) / (2 * self.zoom_factor)
-            
-            if delta > 0:
-                self.set_zoom(self.zoom_factor * 1.25)
-            elif delta < 0:
-                self.set_zoom(self.zoom_factor / 1.25)
-                
-            new_center_x = center_frame * (2 * self.zoom_factor)
-            bar.setValue(int(max(0, new_center_x - viewport_width / 2.0)))
-            
-            event.accept()
-        else:
-            super().wheelEvent(event)
+            bar.setValue(playhead_x - viewport_width + self.AUTO_SCROLL_MARGIN)

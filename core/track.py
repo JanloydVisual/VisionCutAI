@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from .clip import Clip
+from .audio_clip import AudioClip
 
 
 @dataclass
@@ -11,7 +12,7 @@ class Track:
 
     track_type: str = "video"
 
-    clips: List[Clip] = field(
+    clips: List[Clip | AudioClip] = field(
         default_factory=list
     )
 

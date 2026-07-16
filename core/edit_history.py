@@ -10,6 +10,10 @@ class EditHistory:
         self._undo_stack = []
         self._redo_stack = []
 
+    def clear(self):
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+
     @property
     def can_undo(self):
         return bool(self._undo_stack)

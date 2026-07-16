@@ -1,4 +1,4 @@
-﻿"""
+"""
 ProcessingBridge
 -----------------
 The one deliberately Qt-specific adapter in this app. Bridges the
@@ -17,15 +17,21 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 
 class ProcessingBridge(QObject):
-
+    """
+    Bridges pure Python core.ProcessingEngine to PyQt6 signals,
+    allowing the worker thread to safely send Qt signals to the main thread.
+    """
     frame_processed = pyqtSignal(object)
+    telemetry_updated = pyqtSignal(object)
 
-    def __init__(self, processing_engine, parent=None):
+    def __init__(self, engine, parent=None):
         super().__init__(parent)
-        processing_engine.frame_processed.connect(self._on_frame_processed)
+        self.engine = engine
+        self.engine.frame_processed.connect(self._on_frame_processed)
+        self.engine.telemetry_updated.connect(self._on_telemetry_updated)
 
     def _on_frame_processed(self, frame):
-        # Called on ProcessingEngine's background thread. Emitting
-        # a real pyqtSignal here is what safely marshals delivery
-        # back onto this QObject's own thread (the Qt main thread).
         self.frame_processed.emit(frame)
+
+    def _on_telemetry_updated(self, data):
+        self.telemetry_updated.emit(data)

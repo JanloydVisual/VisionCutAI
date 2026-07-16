@@ -61,3 +61,73 @@ def test_total_timeline_duration_uses_last_edited_clip_frame():
     timeline, _, _ = edited_timeline()
 
     assert timeline.total_timeline_duration() == 13
+
+def test_linked_clip_move():
+    timeline = Timeline()
+    video = make_clip(0, 10, 0)
+    audio = make_clip(0, 10, 0)
+    from core.link_manager import LinkManager
+    LinkManager.link(video, audio)
+    timeline.add_clip(video)
+    timeline.add_audio_clip(audio)
+
+    timeline.move_clip(video, 5)
+
+    assert video.timeline_start_frame == 5
+    assert audio.timeline_start_frame == 5
+
+def test_linked_clip_split():
+    timeline = Timeline()
+    video = make_clip(0, 10, 0)
+    audio = make_clip(0, 10, 0)
+    from core.link_manager import LinkManager
+    LinkManager.link(video, audio)
+    timeline.add_clip(video)
+    timeline.add_audio_clip(audio)
+
+    timeline.split_clip(video, 5)
+
+    assert len(timeline.video_tracks[0].clips) == 2
+    assert len(timeline.audio_tracks[0].clips) == 2
+
+    left_video = timeline.video_tracks[0].clips[0]
+    right_video = timeline.video_tracks[0].clips[1]
+    left_audio = timeline.audio_tracks[0].clips[0]
+    right_audio = timeline.audio_tracks[0].clips[1]
+
+    assert left_video.timeline_end_frame == 4
+    assert left_audio.timeline_end_frame == 4
+    assert right_video.timeline_start_frame == 5
+    assert right_audio.timeline_start_frame == 5
+
+    # Check they share the original linked_id
+    assert left_video.linked_id == left_audio.linked_id
+    # Check the right halves got a newly generated matching linked_id
+    assert right_video.linked_id == right_audio.linked_id
+    assert right_video.linked_id != left_video.linked_id
+
+def test_linked_clip_delete():
+    timeline = Timeline()
+    video1 = make_clip(0, 10, 0)
+    audio1 = make_clip(0, 10, 0)
+    video2 = make_clip(11, 20, 11)
+    audio2 = make_clip(11, 20, 11)
+    from core.link_manager import LinkManager
+    LinkManager.link(video1, audio1)
+    LinkManager.link(video2, audio2)
+
+    timeline.add_clip(video1)
+    timeline.add_clip(video2)
+    timeline.add_audio_clip(audio1)
+    timeline.add_audio_clip(audio2)
+
+    timeline.select_clip(video1)
+    timeline.delete_selected_clip()
+
+    # Video1 and Audio1 should be deleted.
+    assert len(timeline.video_tracks[0].clips) == 1
+    assert len(timeline.audio_tracks[0].clips) == 1
+
+    # Video2 and Audio2 should ripple backwards by video1's frame_count (11 frames)
+    assert timeline.video_tracks[0].clips[0].timeline_start_frame == 0
+    assert timeline.audio_tracks[0].clips[0].timeline_start_frame == 0

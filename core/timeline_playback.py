@@ -45,11 +45,12 @@ class TimelinePlayback:
     """
 
     # Speed multiplier levels (forward positive, reverse negative)
-    SPEED_LEVELS = [1, 2, 4]
+    SPEED_LEVELS = [1, 4, 8]
 
-    def __init__(self, timeline, decoder=None):
+    def __init__(self, timeline, decoder=None, render_cache=None):
         self.timeline = timeline
         self.decoder = decoder
+        self.render_cache = render_cache
         self.current_timeline_frame = 0
         self.is_playing = False
 
@@ -132,23 +133,35 @@ class TimelinePlayback:
 
     @property
     def playback_speed(self) -> int:
-        """Current speed multiplier: 1, 2, or 4 (positive = forward, negative = reverse)."""
+        """Current speed multiplier: 1, 4, or 8 (positive = forward, negative = reverse)."""
         return self._playback_speed * self._play_direction
 
     def increase_forward_speed(self) -> None:
-        """Cycle forward speed: 1x → 2x → 4x."""
+        """Cycle forward speed: 1x -> 4x -> 8x. If not playing forward, start at 1x."""
+        if not self.is_playing or self._play_direction != 1:
+            self._playback_speed = self.SPEED_LEVELS[0]
+            self._play_direction = 1
+            self.play()
+            return
+            
         current = abs(self._playback_speed)
-        idx = self.SPEED_LEVELS.index(current) if current in self.SPEED_LEVELS else 0
-        next_idx = min(idx + 1, len(self.SPEED_LEVELS) - 1)
+        idx = self.SPEED_LEVELS.index(current) if current in self.SPEED_LEVELS else -1
+        next_idx = (idx + 1) % len(self.SPEED_LEVELS)
         self._playback_speed = self.SPEED_LEVELS[next_idx]
         self._play_direction = 1
         self._apply_speed()
 
     def increase_reverse_speed(self) -> None:
-        """Cycle reverse speed: -1x → -2x → -4x."""
+        """Cycle reverse speed: -1x -> -4x -> -8x. If not playing reverse, start at -1x."""
+        if not self.is_playing or self._play_direction != -1:
+            self._playback_speed = self.SPEED_LEVELS[0]
+            self._play_direction = -1
+            self.play_reverse()
+            return
+            
         current = abs(self._playback_speed)
-        idx = self.SPEED_LEVELS.index(current) if current in self.SPEED_LEVELS else 0
-        next_idx = min(idx + 1, len(self.SPEED_LEVELS) - 1)
+        idx = self.SPEED_LEVELS.index(current) if current in self.SPEED_LEVELS else -1
+        next_idx = (idx + 1) % len(self.SPEED_LEVELS)
         self._playback_speed = self.SPEED_LEVELS[next_idx]
         self._play_direction = -1
         self._apply_speed()
@@ -177,7 +190,9 @@ class TimelinePlayback:
 
     def _ensure_timer(self) -> QTimer:
         if self._timer is None:
+            from PyQt6.QtCore import Qt
             self._timer = QTimer()
+            self._timer.setTimerType(Qt.TimerType.PreciseTimer)
             self._timer.timeout.connect(self._tick)
         return self._timer
 

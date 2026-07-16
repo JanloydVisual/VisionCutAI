@@ -3,6 +3,7 @@ from uuid import uuid4
 from core.video_reader import VideoReader
 from core.asset import Asset
 from core.clip import Clip
+from core.audio_clip import AudioClip
 
 
 class VideoImporter:
@@ -50,6 +51,19 @@ class VideoImporter:
 
 
         self.project.timeline.add_clip(clip)
+
+
+        audio = AudioClip(
+            source_path=filepath,
+            duration=asset.duration,
+            fps=asset.fps,
+            timeline_start_frame=0,
+        )
+
+        from core.link_manager import LinkManager
+        LinkManager.link(clip, audio)
+
+        self.project.timeline.add_audio_clip(audio)
 
 
         return info

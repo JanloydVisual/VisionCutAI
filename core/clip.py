@@ -19,6 +19,9 @@ class Clip:
 
     background_removed: bool = False
 
+    # Linked media relationship (video <-> audio)
+    linked_id: str | None = None
+
     cached_frames: dict[int, Any] = field(
         default_factory=dict
     )

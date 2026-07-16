@@ -1,4 +1,4 @@
-﻿"""
+"""
 VideoPlayerWidget
 ------------------
 Composes the center editing surface:
@@ -27,6 +27,9 @@ class VideoPlayerWidget(QWidget):
     frame_scrubbed = pyqtSignal(int)
     next_frame_clicked = pyqtSignal()
     previous_frame_clicked = pyqtSignal()
+    ai_mode_changed = pyqtSignal(str)
+    target_object_toggled = pyqtSignal(bool)
+    target_object_selected = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,20 +60,28 @@ class VideoPlayerWidget(QWidget):
         self.controls.pause_clicked.connect(self.pause_clicked.emit)
         self.controls.stop_clicked.connect(self.stop_clicked.emit)
         self.controls.remove_bg_clicked.connect(self.remove_bg_clicked.emit)
+        self.controls.ai_mode_changed.connect(self.ai_mode_changed.emit)
+        self.controls.target_object_toggled.connect(self.target_object_toggled.emit)
+        self.controls.target_object_toggled.connect(self.preview.set_drawing_mode)
+        self.preview.target_object_selected.connect(self.target_object_selected.emit)
+        self.preview.target_object_selected.connect(lambda d: self.controls.target_object_button.setChecked(False))
 
         self.timeline.frame_scrubbed.connect(self.frame_scrubbed.emit)
         self.timeline.next_frame_clicked.connect(self.next_frame_clicked.emit)
         self.timeline.previous_frame_clicked.connect(self.previous_frame_clicked.emit)
 
     # ---------------- Public API ----------------
-    def load_frame(self, pixmap: QPixmap) -> None:
-        self.preview.load_frame(pixmap)
+    def load_frame(self, pixmap: QPixmap, scale_factor: float = 1.0) -> None:
+        self.preview.load_frame(pixmap, scale_factor)
 
-    def set_processed_frame(self, pixmap: QPixmap) -> None:
-        self.preview.set_processed_frame(pixmap)
+    def set_processed_frame(self, pixmap: QPixmap, scale_factor: float = 1.0) -> None:
+        self.preview.set_processed_frame(pixmap, scale_factor)
 
     def show_processed_preview(self) -> None:
         self.preview.show_processed_preview()
+
+    def show_original_preview(self) -> None:
+        self.preview.show_original_preview()
 
     def clear(self) -> None:
         self.preview.clear()
@@ -90,13 +101,16 @@ class VideoPlayerWidget(QWidget):
         self.info_label.setText(info)
 
     def set_controls_enabled(self, enabled: bool) -> None:
-        self.controls.set_controls_enabled(enabled)
+         self.controls.set_controls_enabled(enabled)
 
     def set_total_frames(self, total_frames: int, fps: float) -> None:
         self.timeline.set_total_frames(total_frames, fps)
 
     def set_current_frame(self, frame_index: int) -> None:
         self.timeline.set_current_frame(frame_index)
+
+    def fit_to_window(self) -> None:
+        self.preview.fit_to_window()
 
     def get_overlay_widget(self):
         return self.preview.get_overlay()

@@ -15,6 +15,7 @@ TRIM_HANDLE_WIDTH = 8
 PLAYHEAD_HANDLE_HALF_WIDTH = 8
 PLAYHEAD_HANDLE_HEIGHT = 22
 HOVER_TOOLTIP_DELAY_MS = 500
+SNAP_DISTANCE = 5
 
 
 class TimelineCanvas(QWidget):
@@ -42,6 +43,8 @@ class TimelineCanvas(QWidget):
         self.drag_mode = None
         self.drag_start_x = 0
         self.drag_start_frame = 0
+
+        self._snap_indicator_frame = -1
 
         self._dragging_playhead = False
         self._hovering_playhead = False
@@ -180,7 +183,17 @@ class TimelineCanvas(QWidget):
 
             for clip in track.clips:
                 rect = self._clip_rect(clip, y)
-                painter.fillRect(rect, QColor(70, 120, 220))
+
+                if track.track_type == "audio":
+                    painter.fillRect(
+                        rect,
+                        QColor(80, 160, 110)
+                    )
+                else:
+                    painter.fillRect(
+                        rect,
+                        QColor(70, 120, 220)
+                    )
 
                 if clip == self.selected_clip:
                     painter.setPen(QPen(QColor(255, 215, 0), 3))
@@ -217,6 +230,16 @@ class TimelineCanvas(QWidget):
             painter.drawLine(blade_x, RULER_HEIGHT, blade_x, self.height())
 
             self._draw_blade_time_label(painter, blade_x, self._blade_preview_frame)
+
+        if self._snap_indicator_frame >= 0:
+            snap_x = TRACK_LABEL_WIDTH + self._snap_indicator_frame * PIXELS_PER_FRAME
+            painter.setPen(QPen(QColor(0, 255, 255), 2))
+            painter.drawLine(
+                snap_x,
+                RULER_HEIGHT,
+                snap_x,
+                self.height(),
+            )
 
         playhead_x = self._playhead_x()
         painter.setPen(QPen(QColor(255, 60, 60), 2))
@@ -284,6 +307,35 @@ class TimelineCanvas(QWidget):
         self._hover_clip = None
         super().leaveEvent(event)
 
+
+    def _snap_frame(self, frame, moving_clip):
+        """Find the nearest snap point for clip movement."""
+        targets = [0, self.playhead_frame]
+
+        if self.timeline is not None:
+            for track in self.timeline.tracks:
+                for clip in track.clips:
+                    if clip is moving_clip:
+                        continue
+
+                    targets.append(clip.timeline_start_frame)
+                    targets.append(
+                        clip.timeline_start_frame + clip.frame_count
+                    )
+
+        best_frame = frame
+        best_distance = SNAP_DISTANCE + 1
+
+        for target in targets:
+            distance = abs(frame - target)
+
+            if distance <= SNAP_DISTANCE and distance < best_distance:
+                best_frame = target
+                best_distance = distance
+
+        self._snap_indicator_frame = best_frame if best_frame != frame else -1
+        return best_frame
+
     def mouseMoveEvent(self, event: QMouseEvent):
         x, y = int(event.position().x()), int(event.position().y())
 
@@ -319,9 +371,12 @@ class TimelineCanvas(QWidget):
 
         if self.drag_mode == "move":
             frame_delta = int((event.position().x() - self.drag_start_x) / PIXELS_PER_FRAME)
+            new_frame = max(0, self.drag_start_frame + frame_delta)
+            new_frame = self._snap_frame(new_frame, self.dragging_clip)
+
             self.clip_move_requested.emit(
                 self.dragging_clip,
-                max(0, self.drag_start_frame + frame_delta),
+                new_frame,
             )
         else:
             self.clip_trim_requested.emit(

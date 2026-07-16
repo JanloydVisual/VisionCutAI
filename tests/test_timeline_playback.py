@@ -397,7 +397,7 @@ class TimelinePlaybackTests(unittest.TestCase):
 
         self.assertEqual(playback.playback_speed, 1)
 
-    def test_increase_forward_speed_cycles_1x_2x_4x(self):
+    def test_increase_forward_speed_cycles_1x_4x_8x(self):
         timeline = Timeline()
         timeline.add_clip(clip(0, 9, 0))
         decoder = FakeDecoder()
@@ -407,16 +407,16 @@ class TimelinePlaybackTests(unittest.TestCase):
         self.assertEqual(playback.playback_speed, 1)
 
         playback.increase_forward_speed()
-        self.assertEqual(playback.playback_speed, 2)
-
-        playback.increase_forward_speed()
         self.assertEqual(playback.playback_speed, 4)
 
-        # Stays at 4x (max)
         playback.increase_forward_speed()
-        self.assertEqual(playback.playback_speed, 4)
+        self.assertEqual(playback.playback_speed, 8)
 
-    def test_increase_reverse_speed_cycles_neg1_neg2_neg4(self):
+        # Cycles back to 1x
+        playback.increase_forward_speed()
+        self.assertEqual(playback.playback_speed, 1)
+
+    def test_increase_reverse_speed_cycles_neg1_neg4_neg8(self):
         timeline = Timeline()
         timeline.add_clip(clip(0, 9, 0))
         decoder = FakeDecoder()
@@ -426,14 +426,14 @@ class TimelinePlaybackTests(unittest.TestCase):
         self.assertEqual(playback.playback_speed, -1)
 
         playback.increase_reverse_speed()
-        self.assertEqual(playback.playback_speed, -2)
-
-        playback.increase_reverse_speed()
         self.assertEqual(playback.playback_speed, -4)
 
-        # Stays at -4x (max)
         playback.increase_reverse_speed()
-        self.assertEqual(playback.playback_speed, -4)
+        self.assertEqual(playback.playback_speed, -8)
+
+        # Cycles back to -1x
+        playback.increase_reverse_speed()
+        self.assertEqual(playback.playback_speed, -1)
 
     def test_k_resets_speed_to_1(self):
         timeline = Timeline()
@@ -444,7 +444,7 @@ class TimelinePlaybackTests(unittest.TestCase):
         playback.play()
         playback.increase_forward_speed()
         playback.increase_forward_speed()
-        self.assertEqual(playback.playback_speed, 4)
+        self.assertEqual(playback.playback_speed, 8)
 
         playback.pause()
         playback.reset_playback_speed()
@@ -458,14 +458,14 @@ class TimelinePlaybackTests(unittest.TestCase):
 
         playback.play()
         playback.increase_forward_speed()
-        self.assertEqual(playback.playback_speed, 2)
+        self.assertEqual(playback.playback_speed, 4)
 
         playback.pause()
         playback.reset_playback_speed()
         self.assertEqual(playback.playback_speed, 1)
 
         # L again starts at 1x
-        playback.play()
+        playback.increase_forward_speed()
         self.assertEqual(playback.playback_speed, 1)
 
     def test_speed_property_positive_forward_negative_reverse(self):
@@ -487,11 +487,11 @@ class TimelinePlaybackTests(unittest.TestCase):
         playback = TimelinePlayback(timeline, decoder)
 
         playback.increase_forward_speed()
-        self.assertEqual(playback.playback_speed, 2)
+        self.assertEqual(playback.playback_speed, 1)
 
         # play() uses current speed
         playback.play()
-        self.assertEqual(playback.playback_speed, 2)
+        self.assertEqual(playback.playback_speed, 1)
 
     def test_increase_reverse_speed_without_playing_sets_direction(self):
         timeline = Timeline()
@@ -500,10 +500,10 @@ class TimelinePlaybackTests(unittest.TestCase):
         playback = TimelinePlayback(timeline, decoder)
 
         playback.increase_reverse_speed()
-        self.assertEqual(playback.playback_speed, -2)
+        self.assertEqual(playback.playback_speed, -1)
 
         playback.play_reverse()
-        self.assertEqual(playback.playback_speed, -2)
+        self.assertEqual(playback.playback_speed, -1)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
-from PyQt6.QtWidgets import (
-    QComboBox,
+﻿from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -9,10 +8,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut, QDropEvent
-from PyQt6.QtCore import Qt, QSettings, QUrl
-import os
-import cv2
+from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, QSettings
 
 from config import APP_NAME
 from core.controller import AppController
@@ -21,11 +18,6 @@ from core.preview_engine import PreviewEngine
 from ui.widgets.video_player_widget import VideoPlayerWidget
 from ui.widgets.timeline_editor import TimelineEditor
 from ui.engine_bridge import ProcessingBridge
-from ui.widgets.export_panel import ExportPanel
-from ui.export_bridge import ExportBridge
-from ui.export_progress_dialog import ExportProgressDialog
-from ui.export_complete_dialog import ExportCompleteDialog
-from ui.cancel_export_dialog import CancelExportDialog
 
 
 SPLITTER_STYLE = """
@@ -54,21 +46,10 @@ class MainWindow(QMainWindow):
         self.processing_bridge = ProcessingBridge(self.controller.processing)
         self._processed_frames_received = 0
         self._last_original_shape = None
-        self.preview_scale = 1.0
 
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 700)
         self.setMinimumSize(900, 600)
-        
-        self.setAcceptDrops(True)
-        self._current_media_path = None
-
-        self.export_bridge = ExportBridge(self.controller.exporter, self)
-        self.export_bridge.export_started.connect(self._on_export_started)
-        self.export_bridge.export_progress.connect(self._on_export_progress)
-        self.export_bridge.export_finished.connect(self._on_export_finished)
-        self.export_bridge.export_error.connect(self._on_export_error)
-        self.export_bridge.export_cancelled.connect(self._on_export_cancelled)
 
         self.build_ui()
 
@@ -84,9 +65,9 @@ class MainWindow(QMainWindow):
         top_bar = QWidget()
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(8, 4, 8, 4)
-        self.file_label = QLabel("No media selected")
+        self.file_label = QLabel("No video selected")
         self.browse_button = QPushButton("Browse")
-        self.browse_button.clicked.connect(self.open_media)
+        self.browse_button.clicked.connect(self.open_video)
 
         self.horizontal_workspace_button = QPushButton("Horizontal")
         self.vertical_workspace_button = QPushButton("Vertical")
@@ -105,12 +86,6 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(QLabel("Workspace:"))
         top_layout.addWidget(self.horizontal_workspace_button)
         top_layout.addWidget(self.vertical_workspace_button)
-
-        top_layout.addWidget(QLabel("Preview Quality:"))
-        self.preview_quality_combo = QComboBox()
-        self.preview_quality_combo.addItems(["Full Resolution", "Half Resolution", "Quarter Resolution"])
-        self.preview_quality_combo.currentTextChanged.connect(self._on_preview_quality_changed)
-        top_layout.addWidget(self.preview_quality_combo)
 
         top_layout.addWidget(self.browse_button)
         layout.addWidget(top_bar)
@@ -133,16 +108,27 @@ class MainWindow(QMainWindow):
 
         self.timeline_editor = TimelineEditor()
         self.timeline_editor.set_project(self.controller.project)
-        self.timeline_editor.set_render_cache(self.controller.render_cache)
         bottom_layout.addWidget(self.timeline_editor, stretch=0)
 
-        # Status bar below timeline
-        status_bar = QHBoxLayout()
+        # Any leftover vertical space the splitter gives this section is
+        # absorbed here, instead of stretching the timeline rows or
+        # pushing the status footer around.
+        bottom_layout.addStretch(1)
+
+        # Status bar below timeline - small fixed-height footer that
+        # always stays pinned to the bottom and never grows with the
+        # splitter or the timeline.
+        status_footer = QWidget()
+        status_footer.setFixedHeight(40)
+        status_bar = QHBoxLayout(status_footer)
         status_bar.setContentsMargins(8, 2, 8, 4)
 
         gpu = GPUManager.get_gpu_info()
-        provider = self.controller.active_ai_provider
-        gpu_text = f"GPU : {gpu['name']} ({provider})" if provider != "None" else f"GPU : {gpu['name']} (Not Available)"
+        gpu_text = (
+            f"GPU : {gpu['name']}"
+            if gpu["available"]
+            else "GPU : Not Available"
+        )
         self.gpu_label = QLabel(gpu_text)
         self.gpu_label.setStyleSheet("color: #888; font-size: 11px;")
 
@@ -154,7 +140,7 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self.ai_status_label)
         status_bar.addStretch()
 
-        bottom_layout.addLayout(status_bar)
+        bottom_layout.addWidget(status_footer, stretch=0)
 
         self.splitter.addWidget(bottom_widget)
 
@@ -162,32 +148,12 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 65)
         self.splitter.setStretchFactor(1, 35)
 
-        self.export_panel = ExportPanel(self)
-        self.export_panel.export_requested.connect(self._on_export_requested)
-
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.main_splitter.setHandleWidth(8)
-        self.main_splitter.setStyleSheet(SPLITTER_STYLE)
-        self.main_splitter.addWidget(self.splitter)
-        self.main_splitter.addWidget(self.export_panel)
-        self.main_splitter.setSizes([900, 300])
-
-        layout.addWidget(self.main_splitter, stretch=1)
+        layout.addWidget(self.splitter, stretch=1)
 
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
 
-    def _on_preview_quality_changed(self, text: str):
-        if text == "Full Resolution":
-            self.preview_scale = 1.0
-        elif text == "Half Resolution":
-            self.preview_scale = 0.5
-        elif text == "Quarter Resolution":
-            self.preview_scale = 0.25
-        
-        if self.controller.video.is_loaded and not self.controller.video.is_playing:
-            self.controller.video.seek(self.controller.video.current_frame_index)
 
     def set_workspace_mode(self, mode: str):
         if mode == "vertical":
@@ -218,10 +184,7 @@ class MainWindow(QMainWindow):
         self.video_player.play_clicked.connect(self.controller.play)
         self.video_player.pause_clicked.connect(self.controller.pause)
         self.video_player.stop_clicked.connect(self.controller.stop)
-        self.video_player.remove_bg_clicked.connect(self.toggle_remove_bg)
-        self.video_player.ai_mode_changed.connect(self.controller.set_ai_mode)
-        self.video_player.target_object_toggled.connect(self.controller.set_drawing_mode)
-        self.video_player.target_object_selected.connect(self.controller.set_target_object)
+        self.video_player.remove_bg_clicked.connect(self.start_background_removal)
 
         self.video_player.next_frame_clicked.connect(self.controller.next_frame)
         self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
@@ -239,12 +202,6 @@ class MainWindow(QMainWindow):
         self.timeline_editor.clip_edit_finished.connect(
             self.finish_timeline_edit
         )
-        self.timeline_editor.link_toggle_requested.connect(
-            self.toggle_link_timeline_clip
-        )
-        self.timeline_editor.render_preview_requested.connect(
-            self.start_render_cache
-        )
 
         # Professional editing signals
         self.timeline_editor.split_at_frame.connect(self._on_split_at_frame)
@@ -260,7 +217,6 @@ class MainWindow(QMainWindow):
         self.controller.video.video_loaded.connect(self.video_loaded)
 
         self.processing_bridge.frame_processed.connect(self.update_processed_frame)
-        self.processing_bridge.telemetry_updated.connect(self.update_telemetry)
 
     def _on_split_at_frame(self, timeline_frame: int) -> None:
         """Blade tool: split clip at the clicked timeline position."""
@@ -298,10 +254,10 @@ class MainWindow(QMainWindow):
         self.j_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.j_shortcut.activated.connect(self._increase_reverse_speed)
 
-        # K: pause and play (toggle, reset speed to 1x if starting to play)
+        # K: pause + reset speed to 1x
         self.k_shortcut = QShortcut(QKeySequence(Qt.Key.Key_K), self)
         self.k_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        self.k_shortcut.activated.connect(self._toggle_playback_and_reset_speed)
+        self.k_shortcut.activated.connect(self._pause_and_reset_speed)
 
         # L: forward playback (cycle speed: 1x â†’ 2x â†’ 4x)
         self.l_shortcut = QShortcut(QKeySequence(Qt.Key.Key_L), self)
@@ -313,30 +269,10 @@ class MainWindow(QMainWindow):
         self.b_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.b_shortcut.activated.connect(self._toggle_blade_mode)
 
-        # Added in Sprint 21
-        QShortcut(QKeySequence(Qt.Key.Key_Left), self, activated=self.controller.previous_frame)
-        QShortcut(QKeySequence(Qt.Key.Key_Right), self, activated=self.controller.next_frame)
-        QShortcut(QKeySequence(Qt.Key.Key_Home), self, activated=lambda: self.controller.seek(0))
-        QShortcut(QKeySequence(Qt.Key.Key_End), self, activated=lambda: self.controller.seek(self.controller.video.total_frames - 1) if self.controller.video.is_loaded else None)
-        
-        QShortcut(QKeySequence("Ctrl+I"), self, activated=self.open_media)
-        QShortcut(QKeySequence("Ctrl+E"), self, activated=self.export_panel.export_btn.click)
-        QShortcut(QKeySequence("Ctrl+B"), self, activated=lambda: self._on_split_at_frame(self.controller.video.current_frame_index))
-        
-        QShortcut(QKeySequence("Shift+Z"), self, activated=self.video_player.fit_to_window)
-
     # -- Playback helpers ------------------------------------------------
 
     def _toggle_playback(self):
         self.controller.toggle_playback()
-
-    def _toggle_playback_and_reset_speed(self):
-        """K key: toggle play/pause and reset speed to 1x."""
-        if self.controller.timeline_playback.is_playing:
-            self.controller.pause()
-        else:
-            self.controller.reset_playback_speed()
-            self.controller.play()
 
     def _increase_forward_speed(self):
         """L key: cycle forward speed 1x â†’ 2x â†’ 4x."""
@@ -346,6 +282,10 @@ class MainWindow(QMainWindow):
         """J key: cycle reverse speed -1x â†’ -2x â†’ -4x."""
         self.controller.increase_reverse_speed()
 
+    def _pause_and_reset_speed(self):
+        """K key: pause and reset speed to 1x."""
+        self.controller.pause()
+        self.controller.reset_playback_speed()
 
     def _toggle_blade_mode(self):
         """B key: toggle blade mode on/off."""
@@ -356,63 +296,22 @@ class MainWindow(QMainWindow):
         else:
             self.video_player.set_status("Selection Mode")
 
-    def dragEnterEvent(self, event: QDropEvent):
-        if event.mimeData().hasUrls():
-            url = event.mimeData().urls()[0]
-            if url.isLocalFile():
-                ext = os.path.splitext(url.toLocalFile())[1].lower()
-                if ext in [".mp4", ".mov", ".avi", ".png", ".jpg", ".webp"]:
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
+    def open_video(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Video",
+            "",
+            "Videos (*.mp4 *.mov *.avi)"
+        )
 
-    def dropEvent(self, event: QDropEvent):
-        url = event.mimeData().urls()[0]
-        filepath = url.toLocalFile()
-        self.open_media(filepath)
-
-    def open_media(self, filepath=None):
-        if not filepath:
-            filepath, _ = QFileDialog.getOpenFileName(
-                self,
-                "Open Media",
-                "",
-                "Media (*.mp4 *.mov *.avi *.png *.jpg *.webp)"
-            )
-
-        if not filepath:
+        if not filename:
             return
 
-        self._current_media_path = filepath
-        ext = os.path.splitext(filepath)[1].lower()
+        success = self.controller.open_video(filename)
 
-        if ext in [".png", ".jpg", ".webp"]:
-            info = self.controller.open_image(filepath)
-            if info:
-                self.file_label.setText(filepath)
-                self.image_loaded(info)
-                self.export_panel.update_output_name(filepath)
-        else:
-            success = self.controller.open_video(filepath)
-            if success:
-                self.file_label.setText(filepath)
-                self.timeline_editor.refresh()
-                self._update_link_button_state()
-                self.export_panel.update_output_name(filepath)
-
-    def image_loaded(self, info):
-        self.video_player.set_video_info(
-            f"Loaded Image | {info['Width']} x {info['Height']}"
-        )
-        self.video_player.set_controls_enabled(False)
-        self.timeline_editor.parent().hide()
-        
-        img = self.controller.get_loaded_image()
-        if img is not None:
-            self.update_preview(img, 0)
-            
-        self._update_ai_status_ui()
-        self.export_panel.format_combo.setCurrentText("PNG (Image)")
+        if success:
+            self.file_label.setText(filename)
+            self.timeline_editor.refresh()
 
     def video_loaded(self, info):
         self.video_player.set_video_info(
@@ -421,14 +320,9 @@ class MainWindow(QMainWindow):
         )
 
         self.video_player.set_controls_enabled(True)
-        self.timeline_editor.parent().show()
         self.video_player.set_total_frames(info["Frames"], info["FPS"])
         self.timeline_editor.set_fps(info["FPS"])
 
-        self._update_ai_status_ui()
-        self.export_panel.format_combo.setCurrentText("MOV Alpha")
-
-    def _update_ai_status_ui(self):
         if self.controller.background_removal_active:
             self.video_player.set_remove_bg_text("Background Removal Active")
             self.video_player.set_remove_bg_enabled(False)
@@ -441,68 +335,6 @@ class MainWindow(QMainWindow):
             self.video_player.set_remove_bg_text("Background Removal Unavailable")
             self.video_player.set_remove_bg_enabled(False)
             self.ai_status_label.setText(self.controller.background_removal_status)
-
-    def toggle_remove_bg(self):
-        self.controller.toggle_background_removal()
-        
-        if not self.controller.background_removal_active:
-            self.video_player.set_remove_bg_text("Remove Background")
-            self.video_player.set_status("AI preview disabled")
-            self.ai_status_label.setText("AI: Idle")
-            # Also clear the processed preview and revert to original
-            self.video_player.show_original_preview()
-            self._processed_frames_received = 0
-            self.controller.frames_sent_to_processing = 0
-        else:
-            self.video_player.set_remove_bg_text("Stop Background Removal")
-            self.ai_status_label.setText("AI: Processing (Initializing...)")
-
-    # --- Export Slots ---
-    def _on_export_requested(self, output_dir, output_name, output_format):
-        if not self._current_media_path:
-            return
-
-        if output_format == "PNG (Image)":
-            self.controller.exporter.export_image(self._current_media_path, output_dir, output_name)
-        else:
-            self.controller.exporter.start_export(
-                self._current_media_path, output_dir, 
-                output_name=output_name, output_format=output_format
-            )
-
-    def _on_export_started(self, output_dir):
-        format_str = self.export_panel.get_output_format()
-        is_video = format_str in ["Transparent WebM", "MOV Alpha"]
-        self.progress_dialog = ExportProgressDialog(self, is_video=is_video)
-        self.progress_dialog.cancelled.connect(self.controller.exporter.cancel_export)
-        self.progress_dialog.show()
-
-    def _on_export_progress(self, current, total):
-        if hasattr(self, 'progress_dialog'):
-            self.progress_dialog.set_progress(current, total)
-
-    def _on_export_finished(self, output_dir):
-        if hasattr(self, 'progress_dialog') and self.progress_dialog is not None:
-            try:
-                self.progress_dialog.accept()
-            except RuntimeError:
-                pass
-            self.progress_dialog = None
-        
-        dialog = ExportCompleteDialog(self, output_path=output_dir)
-        dialog.exec()
-
-    def _on_export_error(self, error_msg):
-        if hasattr(self, 'progress_dialog') and self.progress_dialog is not None:
-            try:
-                self.progress_dialog.reject()
-            except RuntimeError:
-                pass
-            self.progress_dialog = None
-        self.video_player.set_status(f"Export Error: {error_msg}")
-
-    def _on_export_cancelled(self, output_dir, frames_exported):
-        self.video_player.set_status(f"Export Cancelled (saved {frames_exported} frames)")
 
     def start_background_removal(self):
         if not self.controller.start_background_removal():
@@ -520,58 +352,6 @@ class MainWindow(QMainWindow):
     def select_timeline_clip(self, clip):
         if self.controller.select_clip(clip):
             self.timeline_editor.refresh()
-            self._update_link_button_state()
-
-    def _update_link_button_state(self):
-        clip = self.controller.selected_clip()
-        is_linked = getattr(clip, 'linked_id', None) is not None if clip else False
-        self.timeline_editor.update_link_button_state(is_linked)
-
-    def toggle_link_timeline_clip(self):
-        if self.controller.toggle_link_selected_clip():
-            self.timeline_editor.refresh()
-            self._update_link_button_state()
-            self.video_player.set_status("Clip link state toggled")
-
-    def start_render_cache(self):
-        if not self.controller.project.timeline.clips:
-            self.video_player.set_status("Timeline is empty")
-            return
-            
-        self.controller.pause()
-        
-        from ui.export_progress_dialog import ExportProgressDialog
-        self.render_dialog = ExportProgressDialog(self)
-        self.render_dialog.setWindowTitle("Rendering Preview Cache...")
-        self.render_dialog.cancelled.connect(self.cancel_render_cache)
-        
-        worker = self.controller.render_cache.start_caching(
-            self.controller.project.timeline,
-            self.preview_scale,
-            processor=self.controller._background_removal_processor
-        )
-        worker.progress_updated.connect(self.render_dialog.set_progress)
-        worker.finished.connect(self.render_cache_finished)
-        
-        self.render_dialog.show()
-        worker.start()
-
-    def cancel_render_cache(self):
-        self.controller.render_cache.cancel()
-        if hasattr(self, 'render_dialog') and self.render_dialog:
-            self.render_dialog.close()
-
-    def render_cache_finished(self, success, message):
-        if hasattr(self, 'render_dialog') and self.render_dialog:
-            self.render_dialog.close()
-        
-        self.timeline_editor.refresh()
-        
-        if success:
-            self.video_player.set_status("Render Cache Complete - Playback is now perfectly smooth")
-            self.controller.preview_seek(self.controller.timeline_playback.current_timeline_frame)
-        else:
-            self.video_player.set_status(f"Render Cache stopped: {message}")
 
     def move_timeline_clip(self, clip, timeline_start_frame):
         if self.controller.move_clip(clip, timeline_start_frame):
@@ -584,7 +364,6 @@ class MainWindow(QMainWindow):
     def split_timeline_clip(self):
         if self.controller.split_selected_clip_at_playhead():
             self.timeline_editor.refresh()
-            self._update_link_button_state()
             self.video_player.set_status("Clip split at playhead")
         else:
             self.video_player.set_status("Select a clip and place the playhead inside it")
@@ -592,7 +371,6 @@ class MainWindow(QMainWindow):
     def delete_timeline_clip(self):
         if self.controller.delete_selected_clip():
             self.timeline_editor.refresh()
-            self._update_link_button_state()
             self.video_player.set_status("Selected clip deleted")
         else:
             self.video_player.set_status("No selected clip to delete")
@@ -604,57 +382,28 @@ class MainWindow(QMainWindow):
     def undo_timeline(self):
         if self.controller.undo_timeline():
             self.timeline_editor.refresh()
-            self._update_link_button_state()
             self.video_player.set_status("Timeline edit undone")
 
     def redo_timeline(self):
         if self.controller.redo_timeline():
             self.timeline_editor.refresh()
-            self._update_link_button_state()
             self.video_player.set_status("Timeline edit redone")
 
     def update_preview(self, frame, timeline_frame):
         self._last_original_shape = tuple(frame.shape)
-        
-        if self.preview_scale < 1.0:
-            h, w = frame.shape[:2]
-            new_w, new_h = int(w * self.preview_scale), int(h * self.preview_scale)
-            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            
-        pixmap = self._frame_to_pixmap(frame)
-        self.video_player.load_frame(pixmap, self.preview_scale)
-
-        # Fetch cached frame if it exists
-        cached_frame = self.controller.render_cache.get_frame(timeline_frame)
-        if cached_frame is not None:
-            # Resize if needed
-            if self.preview_scale < 1.0:
-                h, w = cached_frame.shape[:2]
-                new_w, new_h = int(w * self.preview_scale), int(h * self.preview_scale)
-                cached_frame = cv2.resize(cached_frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            cached_pixmap = self._frame_to_pixmap(cached_frame)
-            self.video_player.set_processed_frame(cached_pixmap, self.preview_scale)
-        elif not self.controller.background_removal_active:
-            # Mirror it to the AI processor viewer so it doesn't freeze when AI is off
-            self.video_player.set_processed_frame(pixmap, self.preview_scale)
+        pixmap = PreviewEngine.frame_to_pixmap(frame)
+        self.video_player.load_frame(pixmap)
 
         self.video_player.set_current_frame(timeline_frame)
         self.timeline_editor.set_playhead_frame(timeline_frame)
 
     def update_processed_frame(self, frame):
         self._processed_frames_received += 1
+
+        pixmap = self._frame_to_pixmap(frame)
+        self.video_player.set_processed_frame(pixmap)
+
         output_shape = tuple(frame.shape)
-
-        if self.preview_scale < 1.0:
-            h, w = frame.shape[:2]
-            new_w, new_h = int(w * self.preview_scale), int(h * self.preview_scale)
-            display_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        else:
-            display_frame = frame
-
-        pixmap = self._frame_to_pixmap(display_frame)
-        self.video_player.set_processed_frame(pixmap, self.preview_scale)
-
         alpha_status = "no alpha channel"
 
         if frame.ndim == 3 and frame.shape[2] == 4:
@@ -673,10 +422,6 @@ class MainWindow(QMainWindow):
                 f"input: {self._last_original_shape} | "
                 f"output: {output_shape} | {alpha_status}"
             )
-
-    def update_telemetry(self, data):
-        latency = data.get("latency_ms", 0.0)
-        self.ai_status_label.setText(f"AI: Processing | Inference: {latency:.1f} ms")
 
     @staticmethod
     def _frame_to_pixmap(frame):

@@ -4,7 +4,8 @@ from core.processing_engine import ProcessingEngine
 from core.project_importer import ProjectImporter
 from core.edit_history import EditHistory
 from core.timeline_playback import TimelinePlayback
-
+from core.render_cache import RenderCache
+from core.ai.object_tracker import ObjectTracker
 
 class AppController:
     """
@@ -24,6 +25,10 @@ class AppController:
         self.background_removal_active = False
         self.background_removal_error = None
         self.frames_sent_to_processing = 0
+        self.ai_mode = "u2net"
+        
+        self.render_cache = RenderCache()
+        self.object_tracker = ObjectTracker()
 
         self.history = EditHistory()
         self._edit_snapshot = None
@@ -46,6 +51,9 @@ class AppController:
         self._blade_mode = False
 
         self._init_ai_processor()
+        
+        from core.exporter import ExportManager
+        self.exporter = ExportManager(self.project, self._background_removal_processor)
 
     def _init_ai_processor(self):
         try:
@@ -61,6 +69,10 @@ class AppController:
     @property
     def background_removal_available(self):
         return self._background_removal_processor is not None
+
+    @property
+    def active_ai_provider(self):
+        return self.ai_device_label if hasattr(self, 'ai_device_label') else "None"
 
     @property
     def background_removal_status(self):
@@ -87,10 +99,7 @@ class AppController:
         return True
 
     def _process_frame(self, frame):
-        """Sends playback frames to the AI pipeline after activation."""
-        if self.background_removal_active:
-            self.frames_sent_to_processing += 1
-            self.processing.enqueue_frame(frame)
+        pass
 
     def open_video(self, filepath):
         info = self.importer.import_video(filepath)
@@ -141,6 +150,117 @@ class AppController:
     # ------------------------------------------------------------------
     # JKL shuttle speed
     # ------------------------------------------------------------------
+
+    def toggle_background_removal(self, force_on=False) -> bool:
+        if not self.video.is_loaded or not self.background_removal_available:
+            return False
+            
+        if force_on:
+            self.background_removal_active = True
+        else:
+            self.background_removal_active = not self.background_removal_active
+            
+        if self.background_removal_active:
+            self.processing.set_processor(self._background_removal_processor)
+        else:
+            self.processing.set_processor(None)
+            
+        # Re-emit current frame
+        self.render_cache.clear()
+        self.timeline_playback.seek(self.timeline_playback.current_timeline_frame)
+        return self.background_removal_active
+
+    def set_ai_mode(self, mode_name: str):
+        if not self.background_removal_available:
+            return
+        self.ai_mode = mode_name
+        self._background_removal_processor.set_model(mode_name)
+        self.render_cache.clear()
+        if self.background_removal_active:
+            self.timeline_playback.seek(self.timeline_playback.current_timeline_frame)
+
+    def set_drawing_mode(self, enabled: bool):
+        pass
+
+    def set_target_object(self, prompt: dict):
+        if not self.video.is_loaded:
+            return
+            
+        timeline_frame = self.timeline_playback.current_timeline_frame
+        position = self.timeline_playback.seek(timeline_frame)
+        if position is None:
+            return
+            
+        frame = self.video.get_frame(position.source_frame)
+        if frame is None:
+            return
+            
+        import cv2
+        import numpy as np
+        if frame.shape[2] == 4:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        else:
+            frame_bgr = frame
+            
+        if self.ai_mode != "sam":
+            self.set_ai_mode("sam")
+            
+        processor = getattr(self, '_background_removal_processor', None)
+        if not processor or not hasattr(processor, '_session'):
+            return
+
+        sam_prompts = []
+        if prompt['type'] == 'points':
+            for pt in prompt['data']:
+                sam_prompts.append({'type': 'point', 'data': list(pt), 'label': prompt.get('label', 1)})
+        else:
+            sam_prompts.append(prompt)
+            
+        from rembg import remove
+        try:
+            rgb_frame = frame[:, :, ::-1]
+            if hasattr(processor, 'lock'):
+                with processor.lock:
+                    rgba = remove(rgb_frame, session=processor._session, sam_prompt=sam_prompts)
+            else:
+                rgba = remove(rgb_frame, session=processor._session, sam_prompt=sam_prompts)
+            alpha = rgba[:, :, 3]
+            
+            contours, _ = cv2.findContours(alpha, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(largest_contour)
+                self.object_tracker.init_tracker(frame_bgr, {'type': 'rectangle', 'data': (x, y, w, h), 'label': prompt.get('label', 1)})
+                processor.sam_prompt = self.object_tracker.get_sam_prompt()
+                self.render_cache.clear()
+                if not self.background_removal_active:
+                    self.toggle_background_removal(True)
+                else:
+                    self.timeline_playback.seek(timeline_frame)
+        except Exception as e:
+            print(f"Failed to extract SAM mask synchronously: {e}")
+
+    def _process_frame(self, frame):
+        """Sends playback frames to the AI pipeline after activation."""
+        if self.background_removal_active:
+            timeline_frame = self.timeline_playback.current_timeline_frame
+            if self.render_cache.get_frame(timeline_frame) is not None:
+                return
+
+            if getattr(self, 'object_tracker', None) and self.object_tracker.is_tracking:
+                import cv2
+                if frame.shape[2] == 4:
+                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                else:
+                    frame_bgr = frame
+                self.object_tracker.update(frame_bgr)
+                if self._background_removal_processor:
+                    self._background_removal_processor.sam_prompt = self.object_tracker.get_sam_prompt()
+            elif self._background_removal_processor:
+                self._background_removal_processor.sam_prompt = None
+                
+            self.frames_sent_to_processing += 1
+            self.processing.enqueue_frame(frame)
 
     def increase_forward_speed(self):
         """Cycle forward speed: 1x → 2x → 4x."""

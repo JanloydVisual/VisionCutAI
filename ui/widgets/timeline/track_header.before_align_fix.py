@@ -31,10 +31,6 @@ class TrackHeaderColumn(QWidget):
 
     def set_timeline(self, timeline) -> None:
         self.timeline = timeline
-        # Mirror TimelineCanvas._sync_content_height() exactly so this
-        # column can never grow/shrink out of sync with the canvas.
-        track_count = len(timeline.tracks) if timeline is not None else 0
-        self.setFixedHeight(TRACK_START_Y + track_count * (TRACK_HEIGHT + TRACK_GAP))
         self.update()
 
     def paintEvent(self, event):
@@ -49,7 +45,7 @@ class TrackHeaderColumn(QWidget):
         label_font.setPointSize(9)
         painter.setFont(label_font)
 
-        y = TRACK_START_Y
+        y = TRACK_START_Y + RULER_HEIGHT
         for track in self.timeline.tracks:
             painter.fillRect(0, y, TRACK_LABEL_WIDTH, TRACK_HEIGHT, QColor(43, 43, 43))
             painter.setPen(QPen(QColor(80, 80, 80), 1))
