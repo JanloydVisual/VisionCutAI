@@ -47,6 +47,8 @@ class TimelineRuler(QWidget):
 
     def set_render_cache(self, render_cache):
         self.render_cache = render_cache
+        if hasattr(self.render_cache, 'cache_updated'):
+            self.render_cache.cache_updated.connect(self.update)
         self.update()
 
     def set_scroll_offset(self, offset: int) -> None:

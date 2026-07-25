@@ -38,6 +38,7 @@ class TimelineEditor(QWidget):
     split_at_frame = pyqtSignal(int)
     playhead_dragged = pyqtSignal(int)
     blade_preview_frame = pyqtSignal(int)
+    collapsed_changed = pyqtSignal(bool)
 
     AUTO_SCROLL_MARGIN = 40
 
@@ -45,6 +46,7 @@ class TimelineEditor(QWidget):
         super().__init__(parent)
         self.project = None
         self.zoom_factor = 1.0
+        self._collapsed = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -63,7 +65,12 @@ class TimelineEditor(QWidget):
         toolbar.addWidget(self.render_preview_button)
         toolbar.addWidget(QLabel("Drag clips to move - drag yellow edges to trim"))
         toolbar.addStretch(1)
-        root.addLayout(toolbar)
+        # Sprint 34.2: wrapped in a container so set_collapsed() can hide
+        # the whole toolbar as one unit (a bare QHBoxLayout has no
+        # setVisible() of its own).
+        self.toolbar_container = QWidget()
+        self.toolbar_container.setLayout(toolbar)
+        root.addWidget(self.toolbar_container)
 
         # Ruler row: a spacer matches the header column width so the
         # ruler's time markings line up with the scrollable canvas,
@@ -109,7 +116,12 @@ class TimelineEditor(QWidget):
 
         body.addWidget(self.scroll)
 
-        root.addLayout(body)
+        # Sprint 34.2: same reasoning as toolbar_container above -- lets
+        # the collapsed view hide tracks/clips as one unit and show just
+        # the ruler row (added separately, above, and never hidden).
+        self.body_container = QWidget()
+        self.body_container.setLayout(body)
+        root.addWidget(self.body_container)
 
         self.scroll.horizontalScrollBar().valueChanged.connect(
             self.ruler.set_scroll_offset
@@ -121,6 +133,16 @@ class TimelineEditor(QWidget):
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMinimumHeight(90)
+        # Sprint 34.1: without an explicit minimum width, Qt falls back to
+        # minimumSizeHint(), which -- despite the canvas living inside a
+        # QScrollArea specifically so its width can be decoupled from
+        # content width -- was still bubbling up toward the canvas's own
+        # 4000px+ minimum (TimelineCanvas._sync_content_width()), silently
+        # flooring this pane at ~650px and defeating any narrower split
+        # requested for the "vertical" (portrait-video) workspace mode.
+        # The scroll area's own horizontal scrollbar is exactly what makes
+        # a genuinely narrow allocation here fine.
+        self.setMinimumWidth(220)
 
         self.split_button.clicked.connect(self.split_requested.emit)
         self.delete_button.clicked.connect(self.delete_requested.emit)
@@ -171,6 +193,30 @@ class TimelineEditor(QWidget):
 
     def set_blade_mode(self, enabled: bool) -> None:
         self.canvas.set_blade_mode(enabled)
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Sprint 34.2: collapsed shows only the ruler + playhead row --
+        the toolbar (Split/Delete/Unlink/Render Preview) and the full
+        track/clip body are hidden as two units. Height constraints are
+        adjusted here too so the outer splitter actually has room to
+        shrink this pane; MainWindow drives the animated resize itself
+        via the collapsed_changed signal, same pattern as ExportPanel.
+        """
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+        self.toolbar_container.setVisible(not collapsed)
+        self.body_container.setVisible(not collapsed)
+        if collapsed:
+            self.setMinimumHeight(36)
+            self.setMaximumHeight(44)
+        else:
+            self.setMinimumHeight(90)
+            self.setMaximumHeight(16777215)
+        self.collapsed_changed.emit(collapsed)
 
     def set_playhead_frame(self, frame_index):
         self.canvas.set_playhead_frame(frame_index)

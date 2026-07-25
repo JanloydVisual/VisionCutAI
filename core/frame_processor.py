@@ -1,4 +1,4 @@
-﻿"""
+"""
 FrameProcessor
 --------------
 Base interface for all frame processors used by ProcessingEngine.
@@ -15,6 +15,10 @@ class FrameProcessor:
     def process(self, frame):
         """Takes one raw frame, returns one processed frame."""
         raise NotImplementedError
+
+    def set_quality(self, quality: str):
+        """Adjusts the internal AI quality/resolution."""
+        pass
 
 
 class PassthroughProcessor(FrameProcessor):

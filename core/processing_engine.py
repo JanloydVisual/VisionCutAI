@@ -43,6 +43,11 @@ class ProcessingEngine:
     def set_processor(self, processor: FrameProcessor) -> None:
         self._processor = processor
 
+    def set_quality(self, quality: str) -> None:
+        """Forward AI quality settings down to the processor."""
+        if hasattr(self._processor, 'set_quality'):
+            self._processor.set_quality(quality)
+
     def start(self) -> None:
         """Starts the background worker thread. Safe to call once."""
         if self._thread is not None and self._thread.is_alive():
@@ -113,7 +118,11 @@ class ProcessingEngine:
 
             start_time = time.perf_counter()
             try:
-                processed = self._processor.process(frame)
+                processor = self._processor
+                if processor:
+                    processed = processor.process(frame)
+                else:
+                    processed = frame
             except Exception as e:
                 logger.error(f"Processing failed: {e}", exc_info=True)
                 processed = frame

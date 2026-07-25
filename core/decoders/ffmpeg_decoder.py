@@ -228,11 +228,12 @@ class FFmpegNVDECDecoder(IVideoDecoder):
                 frame = np.frombuffer(self._buf, dtype=np.uint8).reshape((self._height, self._width, 3)).copy()
                 with self._lock:
                     self._daemon_frame_index += 1
-                
+                    decoded_index = self._daemon_frame_index
+
                 # Retry putting into queue until successful or stopped
                 while not self._stop_event.is_set():
                     try:
-                        self._queue.put(frame, timeout=0.1)
+                        self._queue.put((decoded_index, frame), timeout=0.1)
                         with self._lock:
                             if target != -2:
                                 self._target_frame_index = -2
@@ -255,21 +256,32 @@ class FFmpegNVDECDecoder(IVideoDecoder):
             if frame_index != self._ui_frame_index + 1 and self._target_frame_index != frame_index:
                 self._target_frame_index = frame_index
                 self._flush_queue()
-        
+
         t0 = time.perf_counter()
-        
-        # Wait for frame
+        deadline = t0 + 2.0
+
+        # The reader thread free-runs and can have already queued frames
+        # decoded before a redirect took effect (e.g. it was mid-flight
+        # reading an old target when _target_frame_index changed, or it
+        # had been decoding ahead into an idle queue). _flush_queue() only
+        # clears what's queued at that instant, not frames already in
+        # flight, so a stale frame can still land in the queue after the
+        # flush -- discard anything that isn't actually the requested
+        # frame instead of trusting "next in queue" blindly.
         try:
-            frame = self._queue.get(timeout=2.0)
-            
-            t1 = time.perf_counter()
-            latency = (t1 - t0) * 1000
-            self._decode_times.append(latency)
-            if len(self._decode_times) > 30:
-                self._decode_times.pop(0)
-                
-            self._ui_frame_index = frame_index
-            return True, frame
+            while True:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    return False, None
+                decoded_index, frame = self._queue.get(timeout=remaining)
+                if decoded_index == frame_index:
+                    latency = (time.perf_counter() - t0) * 1000
+                    self._decode_times.append(latency)
+                    if len(self._decode_times) > 30:
+                        self._decode_times.pop(0)
+
+                    self._ui_frame_index = frame_index
+                    return True, frame
         except queue.Empty:
             return False, None
 

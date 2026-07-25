@@ -6,14 +6,23 @@ from PyQt6.QtCore import Qt, QRect, QTimer, pyqtSignal
 
 
 PIXELS_PER_FRAME = 2
-TRACK_HEIGHT = 60
-TRACK_GAP = 10
+# Sprint 34.1: per-track-type heights (video vs audio) instead of one
+# uniform TRACK_HEIGHT, so the timeline stays compact and the viewer can
+# claim the space it frees up. Video Track: 40-45px, Audio Track: 35-40px
+# per spec.
+VIDEO_TRACK_HEIGHT = 44
+AUDIO_TRACK_HEIGHT = 38
+TRACK_GAP = 6
 TRACK_START_Y = 4
 TRACK_LABEL_WIDTH = 140
 RULER_HEIGHT = 30
 TRIM_HANDLE_WIDTH = 8
 HOVER_TOOLTIP_DELAY_MS = 500
 SNAP_DISTANCE = 5
+
+
+def track_height(track) -> int:
+    return AUDIO_TRACK_HEIGHT if getattr(track, "track_type", None) == "audio" else VIDEO_TRACK_HEIGHT
 
 
 class TimelineCanvas(QWidget):
@@ -92,8 +101,11 @@ class TimelineCanvas(QWidget):
         # Height must scale with the number of tracks so the canvas
         # never needs to vertically scroll relative to TrackHeaderColumn -
         # that scroll desync is what caused rows to visually detach.
-        track_count = len(self.timeline.tracks) if self.timeline is not None else 0
-        self.setFixedHeight(TRACK_START_Y + track_count * (TRACK_HEIGHT + TRACK_GAP))
+        # Sprint 34.1: per-track-type heights, so this sums each track's
+        # actual height instead of assuming a single uniform TRACK_HEIGHT.
+        tracks = self.timeline.tracks if self.timeline is not None else []
+        total = sum(track_height(t) + TRACK_GAP for t in tracks)
+        self.setFixedHeight(TRACK_START_Y + total)
 
     def _sync_content_width(self):
         if self.timeline is None:
@@ -126,10 +138,14 @@ class TimelineCanvas(QWidget):
         self.update()
 
     @staticmethod
-    def _clip_rect(clip, track_y):
+    def _clip_rect(clip, track_y, track_h=VIDEO_TRACK_HEIGHT):
+        # Sprint 34.1: inset scales with the track's own (now smaller,
+        # per-type) height instead of a fixed 8px/44px pair sized for the
+        # old uniform 60px row.
         x = clip.timeline_start_frame * PIXELS_PER_FRAME
         width = max(2, clip.frame_count * PIXELS_PER_FRAME)
-        return QRect(int(x), track_y + 8, int(width), 44)
+        inset = 5
+        return QRect(int(x), track_y + inset, int(width), max(8, track_h - inset * 2))
 
     def _timeline_frame_at(self, x):
         return max(0, int(x / PIXELS_PER_FRAME))
@@ -170,7 +186,7 @@ class TimelineCanvas(QWidget):
         # x=0 (TrackHeaderColumn lives outside this widget, in its own
         # fixed column) so no TRACK_LABEL_WIDTH offset belongs in here.
         painter.fillRect(
-            0, y, self.width(), TRACK_HEIGHT, QColor(58, 58, 58)
+            0, y, self.width(), track_height(track), QColor(58, 58, 58)
         )
 
     def paintEvent(self, event):
@@ -183,9 +199,10 @@ class TimelineCanvas(QWidget):
         y = TRACK_START_Y
         for track in self.timeline.tracks:
             self._draw_track_background(painter, y, track)
+            th = track_height(track)
 
             for clip in track.clips:
-                rect = self._clip_rect(clip, y)
+                rect = self._clip_rect(clip, y, th)
 
                 if track.track_type == "audio":
                     painter.fillRect(
@@ -225,7 +242,7 @@ class TimelineCanvas(QWidget):
                         QColor(255, 215, 0),
                     )
 
-            y += TRACK_HEIGHT + TRACK_GAP
+            y += th + TRACK_GAP
 
         if self.blade_mode and self._blade_preview_frame >= 0:
             blade_x = int(self._blade_preview_frame * PIXELS_PER_FRAME)
@@ -254,10 +271,11 @@ class TimelineCanvas(QWidget):
 
         track_y = TRACK_START_Y
         for track in self.timeline.tracks:
+            th = track_height(track)
             for clip in track.clips:
-                if self._clip_rect(clip, track_y).contains(x, y):
+                if self._clip_rect(clip, track_y, th).contains(x, y):
                     return clip
-            track_y += TRACK_HEIGHT + TRACK_GAP
+            track_y += th + TRACK_GAP
 
         return None
 

@@ -16,12 +16,16 @@ class VideoExporter:
     Runs in a background thread to keep UI responsive.
     """
 
-    def __init__(self, output_dir: str, output_name: str, output_format: str, processor=None, timeline=None):
+    def __init__(self, output_dir: str, output_name: str, output_format: str, processor=None, timeline=None, tracking_engine=None):
         self.output_dir = Path(output_dir)
         self.output_name = output_name
         self.output_format = output_format
         self.processor = processor
         self.timeline = timeline
+        # Sprint: Audit 1.0 fix -- see png_sequence_exporter.py for why this
+        # matters: without it, export used a single frozen sam_prompt
+        # snapshot instead of the per-frame tracked prompt.
+        self.tracking_engine = tracking_engine
         self._stop_event = threading.Event()
         self._keep_frames_on_cancel = True
         self._thread = None
@@ -46,13 +50,20 @@ class VideoExporter:
         success, frame = cap.read()
         return frame if success else None
 
-    def _process_frame(self, frame: np.ndarray) -> np.ndarray:
+    def _process_frame(self, frame: np.ndarray, custom_prompt=None) -> np.ndarray:
         if self.processor is None:
             h, w = frame.shape[:2]
             alpha = np.full((h, w, 1), 255, dtype=np.uint8)
             rgb = frame[:, :, ::-1]
             return np.concatenate([rgb, alpha], axis=2)
-        return self.processor.process(frame)
+        return self.processor.process(frame, custom_prompt=custom_prompt)
+
+    def _tracked_prompt_for(self, source_frame: int):
+        """See png_sequence_exporter.py's _tracked_prompt_for -- same fix,
+        same reasoning."""
+        if self.tracking_engine is None:
+            return None
+        return self.tracking_engine.get_tracked_prompt(source_frame)
 
     def export(self, video_path: str, start_frame: int = 0, end_frame: int | None = None):
         if self._thread is not None and self._thread.is_alive():
@@ -149,6 +160,7 @@ class VideoExporter:
                 self._current_frame = frame_idx
                 
                 frame = None
+                source_frame = frame_idx
                 if self.timeline is not None:
                     clip = self.timeline.clip_at_timeline_frame(frame_idx)
                     if clip is not None:
@@ -156,7 +168,7 @@ class VideoExporter:
                         if clip.source_path not in caps:
                             cap = cv2.VideoCapture(clip.source_path)
                             caps[clip.source_path] = cap
-                        
+
                         frame = self._read_frame(caps[clip.source_path], source_frame)
                 else:
                     frame = self._read_frame(caps[video_path], frame_idx)
@@ -167,7 +179,7 @@ class VideoExporter:
                     proc.stdin.write(bgra.tobytes())
                     frames_exported += 1
                 else:
-                    processed = self._process_frame(frame)
+                    processed = self._process_frame(frame, custom_prompt=self._tracked_prompt_for(source_frame))
                     if processed is not None:
                         if processed.shape[2] == 4:
                             bgra = cv2.cvtColor(processed, cv2.COLOR_RGBA2BGRA)

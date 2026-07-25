@@ -20,27 +20,72 @@ import os
 import subprocess
 
 
+COLLAPSED_WIDTH = 44
+EXPANDED_WIDTH = 300
+
+
 class ExportPanel(QWidget):
-    """Export configuration panel for the workspace sidebar."""
+    """Export configuration panel for the workspace sidebar.
+
+    Sprint 34.1: collapsed by default (a slim vertical tab) so the video
+    viewer stays the primary focus of the workspace -- expands to the full
+    configuration form only when the user actually wants to export, and
+    collapses back afterward.
+    """
 
     export_requested = pyqtSignal(str, str, str)  # output_dir, output_name, output_format
+    collapsed_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.settings = QSettings("VisionCutAI", "VisionCutAI")
+        self._collapsed = False
 
         self._build_ui()
         self._load_settings()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Collapsed state: a slim, always-visible tab that expands the
+        # panel on click -- the only thing shown by default.
+        self.collapsed_tab = QPushButton("Export ▸")
+        self.collapsed_tab.setFixedWidth(COLLAPSED_WIDTH)
+        self.collapsed_tab.setStyleSheet("""
+            QPushButton {
+                background-color: #2d7d46;
+                color: white;
+                font-weight: bold;
+                border: none;
+                padding: 10px 2px;
+            }
+            QPushButton:hover { background-color: #3a9d5a; }
+        """)
+        self.collapsed_tab.clicked.connect(lambda: self.set_collapsed(False))
+        outer.addWidget(self.collapsed_tab)
+
+        # Expanded state: the full configuration form, in its own
+        # container so it can be hidden as one unit.
+        self.content = QWidget()
+        layout = QVBoxLayout(self.content)
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
+        outer.addWidget(self.content)
 
-        # Title
+        header_row = QHBoxLayout()
         title = QLabel("EXPORT")
         title.setStyleSheet("font-size: 14px; font-weight: bold; color: #ddd;")
-        layout.addWidget(title)
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        self.collapse_button = QPushButton("◂")
+        self.collapse_button.setFixedWidth(28)
+        self.collapse_button.setToolTip("Collapse export panel")
+        self.collapse_button.setStyleSheet("QPushButton { color: #ddd; border: none; font-weight: bold; }")
+        self.collapse_button.clicked.connect(lambda: self.set_collapsed(True))
+        header_row.addWidget(self.collapse_button)
+        layout.addLayout(header_row)
 
         # Output folder section
         layout.addWidget(QLabel("Output Folder"))
@@ -137,6 +182,23 @@ class ExportPanel(QWidget):
             }
         """)
         layout.addWidget(self.export_btn)
+
+        self.set_collapsed(True)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+        self.content.setVisible(not collapsed)
+        self.collapsed_tab.setVisible(collapsed)
+        # Sprint 34.2: width is now driven by MainWindow's animated
+        # splitter resize (see _on_export_panel_collapsed_changed) instead
+        # of being snapped here -- this method only owns which content is
+        # shown, not how wide the pane is or how it gets there.
+        self.collapsed_changed.emit(collapsed)
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
 
     def _create_separator(self):
         """Create a horizontal separator line."""

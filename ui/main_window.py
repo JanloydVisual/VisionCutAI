@@ -8,11 +8,16 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QVBoxLayout,
     QWidget,
+    QMenuBar,
+    QMenu,
+    QStackedWidget,
 )
-from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut, QDropEvent
-from PyQt6.QtCore import Qt, QSettings, QUrl
+from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut, QDropEvent, QAction
+from PyQt6.QtCore import Qt, QSettings, QUrl, QTimer, QVariantAnimation, QEasingCurve, QAbstractAnimation
 import os
+import sys
 import cv2
+import subprocess
 
 from config import APP_NAME
 from core.controller import AppController
@@ -21,11 +26,15 @@ from core.preview_engine import PreviewEngine
 from ui.widgets.video_player_widget import VideoPlayerWidget
 from ui.widgets.timeline_editor import TimelineEditor
 from ui.engine_bridge import ProcessingBridge
-from ui.widgets.export_panel import ExportPanel
+from ui.widgets.export_panel import ExportPanel, COLLAPSED_WIDTH as EXPORT_PANEL_COLLAPSED_WIDTH, EXPANDED_WIDTH as EXPORT_PANEL_EXPANDED_WIDTH
 from ui.export_bridge import ExportBridge
 from ui.export_progress_dialog import ExportProgressDialog
 from ui.export_complete_dialog import ExportCompleteDialog
 from ui.cancel_export_dialog import CancelExportDialog
+from ui.widgets.developer_panel import DeveloperPanel
+from ui.welcome_screen import WelcomeScreen
+from ui.widgets.stage_indicator import StageIndicator
+from ui.widgets.prompt_list_panel import PromptListPanel
 
 
 SPLITTER_STYLE = """
@@ -45,8 +54,9 @@ QSplitter::handle:pressed {
 
 class MainWindow(QMainWindow):
 
-    def __init__(self):
+    def __init__(self, is_dev=False):
         super().__init__()
+        self.is_dev = is_dev
 
         self.settings = QSettings(APP_NAME, APP_NAME)
 
@@ -56,7 +66,11 @@ class MainWindow(QMainWindow):
         self._last_original_shape = None
         self.preview_scale = 1.0
 
-        self.setWindowTitle(APP_NAME)
+        title = APP_NAME
+        if getattr(self, 'is_dev', False):
+            title += " [DEV]"
+        self.setWindowTitle(title)
+        
         self.resize(1200, 700)
         self.setMinimumSize(900, 600)
         
@@ -71,9 +85,15 @@ class MainWindow(QMainWindow):
         self.export_bridge.export_cancelled.connect(self._on_export_cancelled)
 
         self.build_ui()
+        self.build_menus()
 
         self.connect_signals()
         self.setup_shortcuts()
+        
+        # Auto-save Timer
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.timeout.connect(self._perform_autosave)
+        self.autosave_timer.start(300000)  # 5 minutes
 
     def build_ui(self):
         layout = QVBoxLayout()
@@ -111,9 +131,43 @@ class MainWindow(QMainWindow):
         self.preview_quality_combo.addItems(["Full Resolution", "Half Resolution", "Quarter Resolution"])
         self.preview_quality_combo.currentTextChanged.connect(self._on_preview_quality_changed)
         top_layout.addWidget(self.preview_quality_combo)
+        
+        top_layout.addWidget(QLabel("AI Quality:"))
+        self.ai_quality_combo = QComboBox()
+        self.ai_quality_combo.addItems(["Draft", "Balanced", "Best"])
+        self.ai_quality_combo.setCurrentText("Balanced")
+        self.ai_quality_combo.currentTextChanged.connect(self._on_ai_quality_changed)
+        top_layout.addWidget(self.ai_quality_combo)
+
+        # Sprint 34.2: one-click show/hide for the three workspace panels.
+        # Checkable so the button's own pressed-state always reflects
+        # whether the panel is currently open, regardless of which control
+        # (this button, or the panel's own in-place close affordance)
+        # last changed it.
+        top_layout.addWidget(QLabel("Panels:"))
+        self.export_panel_toggle_button = QPushButton("\U0001F4E4 Export")
+        self.export_panel_toggle_button.setCheckable(True)
+        self.export_panel_toggle_button.setToolTip("Show/hide the export panel")
+        top_layout.addWidget(self.export_panel_toggle_button)
+
+        self.timeline_toggle_button = QPushButton("\U0001F3AC Timeline")
+        self.timeline_toggle_button.setCheckable(True)
+        self.timeline_toggle_button.setChecked(True)
+        self.timeline_toggle_button.setToolTip("Expand/collapse the timeline")
+        top_layout.addWidget(self.timeline_toggle_button)
+
+        if self.is_dev:
+            self.dev_panel_toggle_button = QPushButton("\U0001F6E0 Developer")
+            self.dev_panel_toggle_button.setCheckable(True)
+            self.dev_panel_toggle_button.setChecked(True)
+            self.dev_panel_toggle_button.setToolTip("Show/hide the Developer Panel")
+            top_layout.addWidget(self.dev_panel_toggle_button)
 
         top_layout.addWidget(self.browse_button)
         layout.addWidget(top_bar)
+
+        self.stage_indicator = StageIndicator()
+        layout.addWidget(self.stage_indicator)
 
         # -- Vertical splitter: preview (top) / timeline + info (bottom) --
         self.splitter = QSplitter(Qt.Orientation.Vertical)
@@ -136,47 +190,102 @@ class MainWindow(QMainWindow):
         self.timeline_editor.set_render_cache(self.controller.render_cache)
         bottom_layout.addWidget(self.timeline_editor, stretch=0)
 
-        # Status bar below timeline
-        status_bar = QHBoxLayout()
-        status_bar.setContentsMargins(8, 2, 8, 4)
-
-        gpu = GPUManager.get_gpu_info()
-        provider = self.controller.active_ai_provider
-        gpu_text = f"GPU : {gpu['name']} ({provider})" if provider != "None" else f"GPU : {gpu['name']} (Not Available)"
-        self.gpu_label = QLabel(gpu_text)
-        self.gpu_label.setStyleSheet("color: #888; font-size: 11px;")
-
-        self.ai_status_label = QLabel(self.controller.background_removal_status)
-        self.ai_status_label.setWordWrap(True)
-        self.ai_status_label.setStyleSheet("color: #888; font-size: 11px;")
-
-        status_bar.addWidget(self.gpu_label)
-        status_bar.addWidget(self.ai_status_label)
-        status_bar.addStretch()
-
-        bottom_layout.addLayout(status_bar)
+        # True Status Bar
+        self.status = self.statusBar()
+        self.status.setStyleSheet("QStatusBar { background-color: #2b2b2b; color: #d4d4d4; font-size: 11px; }")
+        
+        self.lbl_proj = QLabel("Project: Ready")
+        self.lbl_video = QLabel("Video: None")
+        self.ai_status_label = QLabel("Cache: 0 | AI: Idle")
+        self.tracking_status_label = QLabel("Tracking: Idle")
+        self.lbl_gpu = QLabel("GPU: -")
+        self.lbl_vram = QLabel("VRAM: -")
+        self.lbl_ram = QLabel("RAM: -")
+        
+        for lbl in (self.lbl_proj, self.lbl_video, self.ai_status_label, self.tracking_status_label, self.lbl_gpu, self.lbl_vram, self.lbl_ram):
+            lbl.setStyleSheet("padding: 0 10px; border-right: 1px solid #444;")
+            self.status.addWidget(lbl)
+            
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self._update_status_bar)
+        self.status_timer.start(1000)
 
         self.splitter.addWidget(bottom_widget)
 
-        # Let the splitter manage proportional sizing (preview ~65%, timeline ~35%)
-        self.splitter.setStretchFactor(0, 65)
-        self.splitter.setStretchFactor(1, 35)
+        # Sprint 34.1: viewer-first -- the preview gets ~70% of the
+        # vertical splitter, timeline the rest. setStretchFactor only
+        # governs how *extra* space is redistributed on resize; the actual
+        # initial split comes from set_workspace_mode()'s setSizes() calls
+        # below, kept in the same ~70/30 ratio.
+        self.splitter.setStretchFactor(0, 70)
+        self.splitter.setStretchFactor(1, 30)
 
         self.export_panel = ExportPanel(self)
         self.export_panel.export_requested.connect(self._on_export_requested)
+        self.export_panel.collapsed_changed.connect(self._on_export_panel_collapsed_changed)
+        self.timeline_editor.collapsed_changed.connect(self._on_timeline_collapsed_changed)
+
+        self.export_panel_toggle_button.clicked.connect(
+            lambda: self.export_panel.set_collapsed(not self.export_panel.is_collapsed()))
+        self.timeline_toggle_button.clicked.connect(
+            lambda: self.timeline_editor.set_collapsed(not self.timeline_editor.is_collapsed()))
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setHandleWidth(8)
         self.main_splitter.setStyleSheet(SPLITTER_STYLE)
         self.main_splitter.addWidget(self.splitter)
         self.main_splitter.addWidget(self.export_panel)
-        self.main_splitter.setSizes([900, 300])
+        # Export panel starts collapsed (ExportPanel.__init__ already calls
+        # set_collapsed(True)) -- give essentially all width to the
+        # viewer/timeline side; the panel's own fixed collapsed width
+        # governs its actual size regardless of the split number here.
+        self.main_splitter.setSizes([1160, EXPORT_PANEL_COLLAPSED_WIDTH])
 
         layout.addWidget(self.main_splitter, stretch=1)
 
+        # Sprint 36: Prompt List panel -- docked, hidden until the user is
+        # actually in Select Target mode (nothing to show otherwise), same
+        # scoping as the row-2 Keep(+)/Remove(-)/Undo/Clear controls.
+        self.prompt_list_panel = PromptListPanel(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.prompt_list_panel)
+        self.prompt_list_panel.setVisible(False)
+
         container = QWidget()
         container.setLayout(layout)
-        self.setCentralWidget(container)
+        
+        self.welcome_screen = WelcomeScreen()
+        self.welcome_screen.open_project_requested.connect(self.open_media)
+        self.welcome_screen.import_video_requested.connect(self.open_media)
+        
+        self.main_stack = QStackedWidget()
+        self.main_stack.addWidget(self.welcome_screen)
+        self.main_stack.addWidget(container)
+        
+        self.setCentralWidget(self.main_stack)
+        self.main_stack.setCurrentIndex(0)
+        
+        if self.is_dev:
+            self.dev_panel = DeveloperPanel(self.controller, self)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dev_panel)
+
+            # Sprint 32B: Developer Debug Overlay toggles.
+            self.dev_panel.chk_debug_points.toggled.connect(
+                lambda v: self.video_player.set_debug_layer_visible("points", v))
+            self.dev_panel.chk_debug_raw_mask.toggled.connect(
+                lambda v: self.video_player.set_debug_layer_visible("raw_mask", v))
+            self.dev_panel.chk_debug_cleaned_mask.toggled.connect(
+                lambda v: self.video_player.set_debug_layer_visible("cleaned_mask", v))
+            self.dev_panel.chk_debug_final_overlay.toggled.connect(
+                lambda v: self.video_player.set_debug_layer_visible("final_overlay", v))
+            self.controller.on_debug_prompt_points_updated = self.video_player.set_debug_prompt_points
+
+            self.dev_panel_toggle_button.clicked.connect(self._on_dev_panel_toggle_clicked)
+            self.dev_panel.visibilityChanged.connect(self._on_dev_panel_visibility_changed)
+
+        # Sprint 34.2: restore each panel's last state now that every
+        # widget involved has been constructed and wired -- before show(),
+        # so there's no visible flash of the construction-time default.
+        self._restore_panel_states()
 
     def _on_preview_quality_changed(self, text: str):
         if text == "Full Resolution":
@@ -189,7 +298,133 @@ class MainWindow(QMainWindow):
         if self.controller.video.is_loaded and not self.controller.video.is_playing:
             self.controller.video.seek(self.controller.video.current_frame_index)
 
+    def _on_ai_quality_changed(self, text: str):
+        """Pass the user's selected AI processing quality to the controller."""
+        self.controller.set_ai_preview_quality(text)
+
+    def build_menus(self):
+        menubar = self.menuBar()
+        
+        file_menu = menubar.addMenu("File")
+        action_open = QAction("Open Project/Video...", self)
+        action_open.triggered.connect(self.open_media)
+        file_menu.addAction(action_open)
+        
+        file_menu.addSeparator()
+        
+        action_settings = QAction("Settings...", self)
+        action_settings.triggered.connect(self.open_settings)
+        file_menu.addAction(action_settings)
+        
+        file_menu.addSeparator()
+        action_exit = QAction("Exit", self)
+        action_exit.triggered.connect(self.close)
+        file_menu.addAction(action_exit)
+
+        help_menu = menubar.addMenu("Help")
+        action_about = QAction("About VisionCut AI", self)
+        action_about.triggered.connect(self.open_about)
+        help_menu.addAction(action_about)
+        
+        if self.is_dev:
+            dev_menu = menubar.addMenu("Developer")
+    
+            action_restart = QAction("Restart Application", self)
+            action_restart.triggered.connect(self._dev_restart_app)
+            dev_menu.addAction(action_restart)
+    
+            action_clear = QAction("Clear Render Cache", self)
+            action_clear.triggered.connect(self._dev_clear_cache)
+            dev_menu.addAction(action_clear)
+    
+            action_test = QAction("Run Integration Tests", self)
+            action_test.triggered.connect(self._dev_run_tests)
+            dev_menu.addAction(action_test)
+    
+            action_bench = QAction("Performance Benchmark", self)
+            action_bench.triggered.connect(self._dev_run_benchmark)
+            dev_menu.addAction(action_bench)
+    
+            action_logs = QAction("Open Logs Directory", self)
+            action_logs.triggered.connect(self._dev_open_logs)
+            dev_menu.addAction(action_logs)
+
+    def open_settings(self):
+        from ui.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        dlg.exec()
+        
+    def open_about(self):
+        from ui.about_dialog import AboutDialog
+        dlg = AboutDialog(self)
+        dlg.exec()
+
+    def _dev_restart_app(self):
+        os.execl(sys.executable, sys.executable, *sys.argv)
+
+    def _dev_clear_cache(self):
+        self.controller.render_cache.clear()
+
+    def _dev_run_tests(self):
+        subprocess.Popen(["cmd.exe", "/c", "start", "pytest"])
+
+    def _dev_run_benchmark(self):
+        subprocess.Popen(["cmd.exe", "/c", "start", "python", "scratch/benchmark_cache.py"])
+
+    def _dev_open_logs(self):
+        os.makedirs("logs", exist_ok=True)
+        os.startfile("logs")
+
+    def _perform_autosave(self):
+        if hasattr(self.controller, 'project'):
+            import datetime
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            os.makedirs("autosave", exist_ok=True)
+            with open(f"autosave/checkpoint_{timestamp}.json", "w") as f:
+                f.write('{"status": "auto-saved"}')
+
+    def _update_status_bar(self):
+        import psutil
+        import subprocess
+        
+        if self.controller.video.is_loaded:
+            fps = getattr(self.controller.video, 'fps', 0)
+            w = getattr(self.controller.video.decoder, 'width', 0) if hasattr(self.controller.video, 'decoder') and self.controller.video.decoder else 0
+            h = getattr(self.controller.video.decoder, 'height', 0) if hasattr(self.controller.video, 'decoder') and self.controller.video.decoder else 0
+            self.lbl_video.setText(f"Video: {w}x{h} | {fps:.1f} FPS")
+        else:
+            self.lbl_video.setText("Video: None")
+            
+        if hasattr(self.controller, 'render_cache') and self.controller.render_cache:
+            try:
+                frames = len(list(self.controller.render_cache.cache_dir.glob("*.png")))
+                ai_text = getattr(self.controller, 'background_removal_status', 'Idle')
+                self.ai_status_label.setText(f"Cache: {frames} | AI: {ai_text}")
+            except:
+                pass
+                
+        try:
+            res = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits"],
+                encoding="utf-8", stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW
+            ).strip()
+            if res:
+                parts = res.split(",")
+                if len(parts) >= 2:
+                    self.lbl_gpu.setText(f"GPU: {parts[0].strip()}%")
+                    self.lbl_vram.setText(f"VRAM: {parts[1].strip()} MB")
+        except:
+            pass
+            
+        mem = psutil.virtual_memory()
+        self.lbl_ram.setText(f"RAM: {mem.used / (1024*1024*1024):.1f} GB")
+
     def set_workspace_mode(self, mode: str):
+        # Sprint 34.1: viewer-first -- the video gets ~70% of the split in
+        # both orientations. In "vertical" mode (side-by-side), the viewer
+        # already spans the window's full height by construction, which is
+        # what actually maximizes portrait video -- the 70/30 width split
+        # here just keeps that mode consistent with "horizontal"'s ratio.
         if mode == "vertical":
             # Timeline left, Video right
             self.splitter.setOrientation(Qt.Orientation.Horizontal)
@@ -197,22 +432,42 @@ class MainWindow(QMainWindow):
             self.splitter.insertWidget(0, self.timeline_editor.parent())
             self.splitter.insertWidget(1, self.video_player)
 
-            self.splitter.setSizes([500, 800])
+            # setStretchFactor is index-bound, not widget-bound -- since
+            # insertWidget above put the timeline at index 0 and the video
+            # at index 1 (the reverse of "horizontal" mode's order), the
+            # factors must be set to match this specific order too, or a
+            # later relayout/resize silently re-favors the timeline instead
+            # of the viewer (the bug this comment is here to prevent
+            # regressing back to).
+            self.splitter.setStretchFactor(0, 30)
+            self.splitter.setStretchFactor(1, 70)
+            self.splitter.setSizes([390, 910])
             self.video_player.fit_to_window()
             self.workspace_mode = "vertical"
 
         else:
-            # Video top, Timeline bottom
+            # Video top, Timeline (now compact) bottom
             self.splitter.setOrientation(Qt.Orientation.Vertical)
 
             self.splitter.insertWidget(0, self.video_player)
             self.splitter.insertWidget(1, self.timeline_editor.parent())
 
-            self.splitter.setSizes([650, 350])
+            self.splitter.setStretchFactor(0, 70)
+            self.splitter.setStretchFactor(1, 30)
+            self.splitter.setSizes([700, 300])
             self.video_player.fit_to_window()
             self.workspace_mode = "horizontal"
 
         self.settings.setValue("workspace_mode", self.workspace_mode)
+
+        # Sprint 34.2: the sizes set above assume an expanded timeline --
+        # if it's currently collapsed, re-apply that collapsed sizing on
+        # top of the new orientation, or switching workspace mode would
+        # silently regrow the pane to full size while its content
+        # (toolbar_container/body_container) stays hidden, leaving a
+        # blank gap instead of either a real collapse or a real timeline.
+        if hasattr(self, 'timeline_editor') and self.timeline_editor.is_collapsed():
+            self._on_timeline_collapsed_changed(True)
 
     def connect_signals(self):
         self.video_player.play_clicked.connect(self.controller.play)
@@ -220,47 +475,106 @@ class MainWindow(QMainWindow):
         self.video_player.stop_clicked.connect(self.controller.stop)
         self.video_player.remove_bg_clicked.connect(self.toggle_remove_bg)
         self.video_player.ai_mode_changed.connect(self.controller.set_ai_mode)
+        
+        self.video_player.ai_quality_changed.connect(self.controller.set_ai_preview_quality)
+        self.video_player.render_priority_changed.connect(self.controller.render_cache.set_render_priority)
         self.video_player.target_object_toggled.connect(self.controller.set_drawing_mode)
+        self.video_player.target_object_toggled.connect(self.prompt_list_panel.setVisible)
         self.video_player.target_object_selected.connect(self.controller.set_target_object)
+        self.video_player.target_object_live_updated.connect(self.controller.set_target_object_live)
+
+        # New connections for interactive paint mask
+        self.controller.on_interactive_mask_updated = self.video_player.set_interactive_mask
+        self.controller.on_interactive_points_updated = self.video_player.set_interactive_points
+        self.controller.on_interactive_busy_changed = self.video_player.set_interactive_busy
+        self.controller.on_tracker_initialized = self._update_ai_status_ui
+        self.controller.on_error_occurred = self._show_error_dialog
+        self.controller.on_tracking_progress_updated = self._on_tracking_progress
+        self.controller.on_tracking_status_changed = self._on_tracking_status
+        self.controller.on_render_cache_started = self._on_render_cache_started
+        self.controller.on_workflow_stage_changed = self.stage_indicator.set_active_stage
+        self.controller.on_prompt_list_changed = self._on_prompt_list_changed
+
+        self.video_player.clear_prompts_clicked.connect(self.controller.clear_target_prompts)
+        self.video_player.undo_prompt_clicked.connect(self.controller.undo_target_prompt)
+        self.video_player.apply_target_clicked.connect(self.controller.apply_target)
+
+        # Sprint 36: Prompt List panel actions -- select is pure UI (no
+        # controller call needed), the rest change the prompt list and so
+        # go through the controller, whose on_prompt_list_changed callback
+        # above refreshes this same panel afterward.
+        self.prompt_list_panel.prompt_toggled.connect(self.controller.toggle_prompt_enabled)
+        self.prompt_list_panel.prompt_deleted.connect(self.controller.delete_prompt)
+        self.prompt_list_panel.undo_requested.connect(self.controller.undo_target_prompt)
+        self.prompt_list_panel.redo_requested.connect(self.controller.redo_target_prompt)
 
         self.video_player.next_frame_clicked.connect(self.controller.next_frame)
         self.video_player.previous_frame_clicked.connect(self.controller.previous_frame)
         self.video_player.frame_scrubbed.connect(self.controller.seek)
 
+        self._connect_timeline_signals()
+
+    def _show_error_dialog(self, message: str):
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "AI Processing Error", message)
+
+    def _connect_timeline_signals(self):
         self.timeline_editor.seek_requested.connect(self.controller.seek)
         self.timeline_editor.clip_selected.connect(self.select_timeline_clip)
         self.timeline_editor.clip_move_requested.connect(self.move_timeline_clip)
         self.timeline_editor.clip_trim_requested.connect(self.trim_timeline_clip)
         self.timeline_editor.split_requested.connect(self.split_timeline_clip)
         self.timeline_editor.delete_requested.connect(self.delete_timeline_clip)
-        self.timeline_editor.clip_edit_started.connect(
-            self.controller.begin_timeline_edit
-        )
-        self.timeline_editor.clip_edit_finished.connect(
-            self.finish_timeline_edit
-        )
-        self.timeline_editor.link_toggle_requested.connect(
-            self.toggle_link_timeline_clip
-        )
-        self.timeline_editor.render_preview_requested.connect(
-            self.start_render_cache
-        )
 
-        # Professional editing signals
+        # Extended timeline and professional editing signals
+        self.timeline_editor.clip_edit_started.connect(self.controller.begin_timeline_edit)
+        self.timeline_editor.clip_edit_finished.connect(self.finish_timeline_edit)
+        self.timeline_editor.link_toggle_requested.connect(self.toggle_link_timeline_clip)
+        self.timeline_editor.render_preview_requested.connect(self.start_render_cache)
         self.timeline_editor.split_at_frame.connect(self._on_split_at_frame)
         self.timeline_editor.playhead_dragged.connect(self._on_playhead_dragged)
         self.timeline_editor.blade_preview_frame.connect(self._on_blade_preview_frame)
 
-        # Connect to the coordinator's signal which emits
-        # (frame, timeline_frame) instead of raw source frames.
+        # Controller and bridge signals
         self.controller.frame_ready.connect(self.update_preview)
-
-        # VideoEngine.video_loaded is still the source-of-truth for
-        # metadata after a file is opened.
         self.controller.video.video_loaded.connect(self.video_loaded)
-
         self.processing_bridge.frame_processed.connect(self.update_processed_frame)
         self.processing_bridge.telemetry_updated.connect(self.update_telemetry)
+
+    def _on_tracking_progress(self, current, total, confidence):
+        self.tracking_status_label.setText(f"Tracking Object... Frame {current} / {total} | Confidence: {int(confidence * 100)}%")
+        self.tracking_status_label.setStyleSheet("color: #FFC107; font-size: 11px; font-weight: bold;") # Amber while tracking
+
+    def _on_tracking_status(self, text):
+        self.tracking_status_label.setText(f"Tracking: {text}")
+        # Sprint 35: "Refinement: Regressed ..." must not fall through to
+        # the green default below -- check it before the generic
+        # "Partial object detected" amber branch since a regression can
+        # legitimately follow either a clean or a partial result.
+        if "Refinement: Regressed" in text:
+            self.tracking_status_label.setStyleSheet("color: #F44336; font-size: 11px; font-weight: bold;") # Red -- this prompt made it worse
+        elif "Refinement: Improved" in text:
+            self.tracking_status_label.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;") # Green -- this prompt helped
+        elif "Refinement: Stayed the same" in text:
+            self.tracking_status_label.setStyleSheet("color: #5dade2; font-size: 11px; font-weight: bold;") # Neutral blue -- no change
+        elif "Failed" in text or "Lost" in text or "Paused" in text or "No object detected" in text:
+            self.tracking_status_label.setStyleSheet("color: #F44336; font-size: 11px; font-weight: bold;") # Red for errors
+        elif "Partial object detected" in text:
+            self.tracking_status_label.setStyleSheet("color: #FFB300; font-size: 11px; font-weight: bold;") # Amber warning, not a success
+        elif "Complete" in text:
+            self.tracking_status_label.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;") # Green for success
+        else:
+            self.tracking_status_label.setStyleSheet("color: #4CAF50; font-size: 11px; font-weight: bold;")
+
+    def _on_prompt_list_changed(self):
+        """Sprint 36: fired after any prompt-list edit (add/delete/toggle/
+        undo/redo) -- simplest correct approach is to just rebuild the
+        panel from the controller's current state rather than trying to
+        patch it incrementally."""
+        self.prompt_list_panel.refresh(
+            self.controller._interactive_prompts,
+            self.controller._last_refinement_verdict,
+        )
 
     def _on_split_at_frame(self, timeline_frame: int) -> None:
         """Blade tool: split clip at the clicked timeline position."""
@@ -281,11 +595,13 @@ class MainWindow(QMainWindow):
         self.redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
         self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
         self.backspace_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self)
+        self.esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
 
         self.undo_shortcut.activated.connect(self.undo_timeline)
         self.redo_shortcut.activated.connect(self.redo_timeline)
         self.delete_shortcut.activated.connect(self.delete_timeline_clip)
         self.backspace_shortcut.activated.connect(self.delete_timeline_clip)
+        self.esc_shortcut.activated.connect(self.cancel_interactive_mask)
 
         # -- Global keyboard playback controls (JKL / Space / B) --------
         # Space: toggle play/pause
@@ -383,6 +699,8 @@ class MainWindow(QMainWindow):
         if not filepath:
             return
 
+        self.main_stack.setCurrentIndex(1)
+        
         self._current_media_path = filepath
         ext = os.path.splitext(filepath)[1].lower()
 
@@ -399,6 +717,16 @@ class MainWindow(QMainWindow):
                 self.timeline_editor.refresh()
                 self._update_link_button_state()
                 self.export_panel.update_output_name(filepath)
+                # Sprint 34.1: timeline_editor.refresh() above resizes the
+                # canvas/header to match the loaded project's real content,
+                # which silently triggers Qt to recompute the splitter's
+                # layout and override the ~70/30 split set_workspace_mode()
+                # just applied inside video_loaded() (QSplitter.setSizes()
+                # is a one-time command, not a persistent constraint, and
+                # a child's size-hint change can force a relayout that
+                # ignores it). Reapply now that all content-driven sizing
+                # has settled, so the viewer's share actually sticks.
+                self.set_workspace_mode(self.workspace_mode)
 
     def image_loaded(self, info):
         self.video_player.set_video_info(
@@ -415,6 +743,14 @@ class MainWindow(QMainWindow):
         self.export_panel.format_combo.setCurrentText("PNG (Image)")
 
     def video_loaded(self, info):
+        # Portrait sources (common for social/vertical content) get squashed
+        # to a sliver if left in the wide/short "horizontal" pane -- match
+        # the workspace layout to the footage so the preview is actually
+        # usable without the user having to discover the toggle themselves.
+        best_mode = "vertical" if info['Height'] > info['Width'] else "horizontal"
+        if getattr(self, "workspace_mode", None) != best_mode:
+            self.set_workspace_mode(best_mode)
+
         self.video_player.set_video_info(
             f"Loaded | {info['Width']} x {info['Height']} | "
             f"{info['FPS']:.2f} FPS"
@@ -429,33 +765,33 @@ class MainWindow(QMainWindow):
         self.export_panel.format_combo.setCurrentText("MOV Alpha")
 
     def _update_ai_status_ui(self):
-        if self.controller.background_removal_active:
-            self.video_player.set_remove_bg_text("Background Removal Active")
-            self.video_player.set_remove_bg_enabled(False)
-            self.ai_status_label.setText("Background removal active")
-        elif self.controller.background_removal_available:
-            self.video_player.set_remove_bg_text("Remove Background")
+        if self.controller.is_background_removal_active:
+            self.video_player.set_remove_bg_text("Stop Background Removal")
             self.video_player.set_remove_bg_enabled(True)
-            self.ai_status_label.setText(self.controller.background_removal_status)
+        elif self.controller.background_removal_available:
+            if not self.controller.object_tracker.is_tracking:
+                self.video_player.set_remove_bg_text("Remove Background (Needs Target)")
+                self.video_player.set_remove_bg_enabled(False)
+            else:
+                self.video_player.set_remove_bg_text("Remove Background")
+                self.video_player.set_remove_bg_enabled(True)
         else:
             self.video_player.set_remove_bg_text("Background Removal Unavailable")
             self.video_player.set_remove_bg_enabled(False)
-            self.ai_status_label.setText(self.controller.background_removal_status)
+            
+        self._update_status_bar()
 
     def toggle_remove_bg(self):
         self.controller.toggle_background_removal()
         
-        if not self.controller.background_removal_active:
-            self.video_player.set_remove_bg_text("Remove Background")
-            self.video_player.set_status("AI preview disabled")
-            self.ai_status_label.setText("AI: Idle")
-            # Also clear the processed preview and revert to original
+        if not self.controller.is_background_removal_active:
+            # clear the processed preview and revert to original
             self.video_player.show_original_preview()
             self._processed_frames_received = 0
             self.controller.frames_sent_to_processing = 0
-        else:
-            self.video_player.set_remove_bg_text("Stop Background Removal")
-            self.ai_status_label.setText("AI: Processing (Initializing...)")
+        
+        # update the UI buttons and labels
+        self._update_ai_status_ui()
 
     # --- Export Slots ---
     def _on_export_requested(self, output_dir, output_name, output_format):
@@ -488,9 +824,12 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
             self.progress_dialog = None
-        
+
         dialog = ExportCompleteDialog(self, output_path=output_dir)
         dialog.exec()
+        # Sprint 34.2: "Do not automatically collapse panels -- the user
+        # decides." -- Sprint 34.1 auto-collapsed the export panel here;
+        # that's now the user's call via the toolbar toggle.
 
     def _on_export_error(self, error_msg):
         if hasattr(self, 'progress_dialog') and self.progress_dialog is not None:
@@ -500,9 +839,120 @@ class MainWindow(QMainWindow):
                 pass
             self.progress_dialog = None
         self.video_player.set_status(f"Export Error: {error_msg}")
+        # Sprint 34.2: no auto-collapse -- see _on_export_finished.
 
     def _on_export_cancelled(self, output_dir, frames_exported):
         self.video_player.set_status(f"Export Cancelled (saved {frames_exported} frames)")
+        # Sprint 34.2: no auto-collapse -- see _on_export_finished.
+
+    # ------------------------------------------------------------------
+    # Sprint 34.2: Toggleable panels (Export / Timeline / Developer)
+    # ------------------------------------------------------------------
+
+    def _animate_splitter_to(self, splitter: QSplitter, target_sizes: list, duration: int = 220) -> None:
+        """Smoothly interpolate a QSplitter's pane sizes from wherever
+        they currently are to target_sizes. Reused for both the export
+        panel (main_splitter) and the timeline collapse (self.splitter) --
+        QSplitter has no built-in animated setSizes(), so this steps it
+        via QVariantAnimation instead.
+        """
+        start_sizes = list(splitter.sizes())
+        if len(start_sizes) != len(target_sizes):
+            splitter.setSizes(target_sizes)
+            return
+
+        anim = QVariantAnimation(self)
+        anim.setDuration(duration)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        def step(t):
+            sizes = [int(a + (b - a) * t) for a, b in zip(start_sizes, target_sizes)]
+            splitter.setSizes(sizes)
+        anim.valueChanged.connect(step)
+
+        if not hasattr(self, '_panel_animations'):
+            self._panel_animations = []
+        self._panel_animations.append(anim)
+        anim.finished.connect(lambda: self._panel_animations.remove(anim) if anim in self._panel_animations else None)
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_export_panel_collapsed_changed(self, collapsed: bool) -> None:
+        # Sprint 34.1: viewer-first -- give the freed/reclaimed width to the
+        # viewer+timeline side of the main splitter, not just to the panel
+        # itself, so expanding/collapsing actually changes usable preview
+        # space rather than leaving dead space.
+        # Sprint 34.2: animated, remembers the pre-collapse width instead
+        # of always snapping back to a fixed default, and persists state.
+        total = sum(self.main_splitter.sizes()) or (1160 + EXPORT_PANEL_EXPANDED_WIDTH)
+        if collapsed:
+            current_width = self.main_splitter.sizes()[1]
+            if current_width > EXPORT_PANEL_COLLAPSED_WIDTH + 10:
+                self._export_panel_prev_width = current_width
+            target_width = EXPORT_PANEL_COLLAPSED_WIDTH
+        else:
+            target_width = getattr(self, '_export_panel_prev_width', EXPORT_PANEL_EXPANDED_WIDTH)
+        self._animate_splitter_to(self.main_splitter, [max(total - target_width, 200), target_width])
+        self.export_panel_toggle_button.setChecked(not collapsed)
+        self.settings.setValue("export_panel_collapsed", collapsed)
+
+    def _timeline_pane_index(self) -> int:
+        # self.splitter's child order swaps between workspace modes (see
+        # set_workspace_mode) -- horizontal: [video, timeline], vertical:
+        # [timeline, video]. Anything sizing the timeline pane specifically
+        # needs to know which index it's actually at right now.
+        return 0 if getattr(self, 'workspace_mode', 'horizontal') == 'vertical' else 1
+
+    def _on_timeline_collapsed_changed(self, collapsed: bool) -> None:
+        idx = self._timeline_pane_index()
+        video_idx = 1 - idx
+        sizes = list(self.splitter.sizes())
+        total = sum(sizes) or 1000
+        if collapsed:
+            if sizes[idx] > 50:
+                self._timeline_prev_size = sizes[idx]
+            target_timeline = 40
+        else:
+            target_timeline = getattr(self, '_timeline_prev_size', 300)
+        new_sizes = [0, 0]
+        new_sizes[idx] = target_timeline
+        new_sizes[video_idx] = max(total - target_timeline, 200)
+        self._animate_splitter_to(self.splitter, new_sizes)
+        self.timeline_toggle_button.setChecked(not collapsed)
+        self.settings.setValue("timeline_collapsed", collapsed)
+
+    def _on_dev_panel_toggle_clicked(self) -> None:
+        self.dev_panel.setVisible(not self.dev_panel.isVisible())
+
+    def _on_dev_panel_visibility_changed(self, visible: bool) -> None:
+        # Also fires if the user closes the dock via its own [x] or
+        # re-docks/floats it -- keeps the toolbar button and QSettings in
+        # sync regardless of which control the user actually used. Skipped
+        # during window teardown (see closeEvent) since Qt hides the dock
+        # as a side effect of closing, which is not a user preference change.
+        if getattr(self, '_closing', False):
+            return
+        self.dev_panel_toggle_button.setChecked(visible)
+        self.settings.setValue("dev_panel_visible", visible)
+
+    def _restore_panel_states(self) -> None:
+        export_collapsed = self.settings.value("export_panel_collapsed", True, type=bool)
+        self.export_panel.set_collapsed(export_collapsed)
+        # set_collapsed() no-ops if the value already matches its
+        # construction-time default (True) -- force the splitter sizing
+        # and button state to apply regardless, so a persisted "expanded"
+        # actually shows expanded on this launch too.
+        self._on_export_panel_collapsed_changed(export_collapsed)
+
+        timeline_collapsed = self.settings.value("timeline_collapsed", False, type=bool)
+        self.timeline_editor.set_collapsed(timeline_collapsed)
+        self._on_timeline_collapsed_changed(timeline_collapsed)
+
+        if self.is_dev:
+            dev_visible = self.settings.value("dev_panel_visible", True, type=bool)
+            self.dev_panel.setVisible(dev_visible)
+            self.dev_panel_toggle_button.setChecked(dev_visible)
 
     def start_background_removal(self):
         if not self.controller.start_background_removal():
@@ -514,7 +964,7 @@ class MainWindow(QMainWindow):
         self.video_player.show_processed_preview()
         self.video_player.set_remove_bg_text("Background Removal Active")
         self.video_player.set_remove_bg_enabled(False)
-        self.ai_status_label.setText("Background removal active ? processed preview is full-screen")
+        self._update_status_bar()
         self.video_player.set_status("AI processing started")
 
     def select_timeline_clip(self, clip):
@@ -533,6 +983,18 @@ class MainWindow(QMainWindow):
             self._update_link_button_state()
             self.video_player.set_status("Clip link state toggled")
 
+    def _on_render_cache_started(self, worker):
+        from ui.export_progress_dialog import ExportProgressDialog
+        self.render_dialog = ExportProgressDialog(self)
+        self.render_dialog.setWindowTitle("Generating AI Cache...")
+        self.render_dialog.cancelled.connect(self.cancel_render_cache)
+        
+        worker.progress_updated.connect(self.render_dialog.set_progress)
+        worker.finished.connect(self.render_cache_finished)
+        
+        self.render_dialog.show()
+        worker.start()
+
     def start_render_cache(self):
         if not self.controller.project.timeline.clips:
             self.video_player.set_status("Timeline is empty")
@@ -546,8 +1008,8 @@ class MainWindow(QMainWindow):
         self.render_dialog.cancelled.connect(self.cancel_render_cache)
         
         worker = self.controller.render_cache.start_caching(
-            self.controller.project.timeline,
-            self.preview_scale,
+            self.controller.timeline_playback,
+            self.controller.tracking_engine,
             processor=self.controller._background_removal_processor
         )
         worker.progress_updated.connect(self.render_dialog.set_progress)
@@ -601,13 +1063,25 @@ class MainWindow(QMainWindow):
         if self.controller.end_timeline_edit():
             self.timeline_editor.refresh()
 
+    def cancel_interactive_mask(self):
+        if self.video_player.controls.target_object_button.isChecked():
+            self.video_player.controls.target_object_button.setChecked(False)
+
     def undo_timeline(self):
+        if self.video_player.controls.target_object_button.isChecked():
+            self.controller.undo_target_prompt()
+            return
+            
         if self.controller.undo_timeline():
             self.timeline_editor.refresh()
             self._update_link_button_state()
             self.video_player.set_status("Timeline edit undone")
 
     def redo_timeline(self):
+        if self.video_player.controls.target_object_button.isChecked():
+            self.controller.redo_target_prompt()
+            return
+            
         if self.controller.redo_timeline():
             self.timeline_editor.refresh()
             self._update_link_button_state()
@@ -625,7 +1099,7 @@ class MainWindow(QMainWindow):
         self.video_player.load_frame(pixmap, self.preview_scale)
 
         # Fetch cached frame if it exists
-        cached_frame = self.controller.render_cache.get_frame(timeline_frame)
+        cached_frame = self.controller.render_cache.get_composite(timeline_frame, frame)
         if cached_frame is not None:
             # Resize if needed
             if self.preview_scale < 1.0:
@@ -634,14 +1108,18 @@ class MainWindow(QMainWindow):
                 cached_frame = cv2.resize(cached_frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
             cached_pixmap = self._frame_to_pixmap(cached_frame)
             self.video_player.set_processed_frame(cached_pixmap, self.preview_scale)
-        elif not self.controller.background_removal_active:
-            # Mirror it to the AI processor viewer so it doesn't freeze when AI is off
+        else:
+            # Fallback to the raw frame if not cached, so the video doesn't freeze or jump
             self.video_player.set_processed_frame(pixmap, self.preview_scale)
 
         self.video_player.set_current_frame(timeline_frame)
         self.timeline_editor.set_playhead_frame(timeline_frame)
 
     def update_processed_frame(self, frame):
+        # Ignore out-of-order asynchronous AI frames if we are actively playing
+        if self.controller.timeline_playback.is_playing:
+            return
+            
         self._processed_frames_received += 1
         output_shape = tuple(frame.shape)
 
@@ -675,8 +1153,7 @@ class MainWindow(QMainWindow):
             )
 
     def update_telemetry(self, data):
-        latency = data.get("latency_ms", 0.0)
-        self.ai_status_label.setText(f"AI: Processing | Inference: {latency:.1f} ms")
+        self._update_status_bar()
 
     @staticmethod
     def _frame_to_pixmap(frame):
@@ -690,5 +1167,11 @@ class MainWindow(QMainWindow):
         return PreviewEngine.frame_to_pixmap(frame)
 
     def closeEvent(self, event):
+        # Sprint 34.2: closing the window hides the Developer Panel dock as
+        # a side effect, which fires visibilityChanged(False) -- without
+        # this flag, _on_dev_panel_visibility_changed would mistake that
+        # for a real user toggle and silently overwrite their actual
+        # preference with "hidden" on every single exit.
+        self._closing = True
         self.controller.release()
         super().closeEvent(event)

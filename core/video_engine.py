@@ -118,6 +118,18 @@ class VideoEngine:
         self.pause()
         target = max(0, min(frame_index, self.total_frames - 1))
         self._seek_and_show(target)
+        
+    def get_frame(self, frame_index):
+        """Synchronously fetch a frame by index (checks cache first)."""
+        if not self.decoder:
+            return None
+        if frame_index in self._frame_cache:
+            return self._frame_cache[frame_index]
+        success, frame = self.decoder.read_frame(frame_index)
+        if success and frame is not None:
+            self._add_to_cache(frame_index, frame)
+            return frame
+        return None
 
     def _seek_and_show(self, frame_index):
         if not self.decoder:

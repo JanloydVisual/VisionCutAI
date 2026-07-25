@@ -16,9 +16,10 @@ class ExportManager:
     Keeps export logic separate from UI and core systems.
     """
 
-    def __init__(self, project, background_removal_processor=None):
+    def __init__(self, project, background_removal_processor=None, tracking_engine=None):
         self.project = project
         self.background_removal_processor = background_removal_processor
+        self.tracking_engine = tracking_engine
 
         # Current active exporter
         self._exporter = None
@@ -109,10 +110,14 @@ class ExportManager:
         if self.background_removal_processor is not None:
             try:
                 processor = self.background_removal_processor
+                if hasattr(processor, 'quality'):
+                    self._pre_export_quality = processor.quality
+                if hasattr(processor, 'set_quality'):
+                    processor.set_quality("Best")
             except Exception:
                 pass  # Fall back to passthrough on error
 
-        self._exporter = PngSequenceExporter(output_dir, processor=processor, timeline=self.project.timeline)
+        self._exporter = PngSequenceExporter(output_dir, processor=processor, timeline=self.project.timeline, tracking_engine=self.tracking_engine)
 
         # Wire up signals
         self._exporter.progress_updated.connect(self._on_progress)
@@ -134,10 +139,14 @@ class ExportManager:
         if self.background_removal_processor is not None:
             try:
                 processor = self.background_removal_processor
+                if hasattr(processor, 'quality'):
+                    self._pre_export_quality = processor.quality
+                if hasattr(processor, 'set_quality'):
+                    processor.set_quality("Best")
             except Exception:
                 pass
 
-        self._exporter = VideoExporter(output_dir, output_name, output_format, processor=processor, timeline=self.project.timeline)
+        self._exporter = VideoExporter(output_dir, output_name, output_format, processor=processor, timeline=self.project.timeline, tracking_engine=self.tracking_engine)
 
         self._exporter.progress_updated.connect(self._on_progress)
         self._exporter.export_completed.connect(self._on_completed)
@@ -150,14 +159,25 @@ class ExportManager:
     def _on_progress(self, frame_index: int, total_frames: int):
         self.export_progress.emit(frame_index, total_frames)
 
+    def _restore_quality(self):
+        if self.background_removal_processor is not None:
+            try:
+                if hasattr(self, '_pre_export_quality') and hasattr(self.background_removal_processor, 'set_quality'):
+                    self.background_removal_processor.set_quality(self._pre_export_quality)
+            except Exception:
+                pass
+
     def _on_completed(self, output_dir: str):
+        self._restore_quality()
         self.export_finished.emit(output_dir)
 
     def _on_failed(self, error: str):
+        self._restore_quality()
         self.export_error.emit(error)
 
     def _on_cancelled(self, output_dir: str, frames_exported: int):
         """Handle export cancellation."""
+        self._restore_quality()
         self._frames_exported = frames_exported
         self.export_cancelled.emit(output_dir, frames_exported)
 

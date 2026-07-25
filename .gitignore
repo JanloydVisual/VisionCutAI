@@ -23,3 +23,45 @@ models/
 
 # OS
 Thumbs
+
+# PyInstaller build output
+build/
+dist/
+VisionCutAI/
+
+# Debug/scratch artifacts
+debug_*.png
+debug_*.py
+benchmark_results_*.json
+crash_log.txt
+error_log.txt
+workspace_*.txt
+history.txt
+out.txt
+project_structure.txt
+frame_*.png
+sprint*_benchmark*.py
+sprint*_benchmark*.txt
+sprint*_benchmark*.json
+verify_*.py
+test_cancel.py
+test_crash.py
+test_hw.py
+test_latencies.py
+test_pipe.py
+test_tcp.py
+check_gpu.py
+profile_4k.py
+benchmark_decoders.py
+
+# Test media / scratch dirs
+autosave/
+scratch/
+test_media/
+test_media_export/
+test_workspace/
+crashes/
+*.mp4
+*.webm
+*.avi
+test_mask.png

@@ -14,10 +14,10 @@ from PyQt6.QtCore import Qt, QRect
 
 from ui.widgets.timeline.timeline_canvas import (
     TRACK_LABEL_WIDTH,
-    TRACK_HEIGHT,
     TRACK_GAP,
     TRACK_START_Y,
     RULER_HEIGHT,
+    track_height,
 )
 
 
@@ -33,8 +33,9 @@ class TrackHeaderColumn(QWidget):
         self.timeline = timeline
         # Mirror TimelineCanvas._sync_content_height() exactly so this
         # column can never grow/shrink out of sync with the canvas.
-        track_count = len(timeline.tracks) if timeline is not None else 0
-        self.setFixedHeight(TRACK_START_Y + track_count * (TRACK_HEIGHT + TRACK_GAP))
+        tracks = timeline.tracks if timeline is not None else []
+        total = sum(track_height(t) + TRACK_GAP for t in tracks)
+        self.setFixedHeight(TRACK_START_Y + total)
         self.update()
 
     def paintEvent(self, event):
@@ -51,13 +52,14 @@ class TrackHeaderColumn(QWidget):
 
         y = TRACK_START_Y
         for track in self.timeline.tracks:
-            painter.fillRect(0, y, TRACK_LABEL_WIDTH, TRACK_HEIGHT, QColor(43, 43, 43))
+            th = track_height(track)
+            painter.fillRect(0, y, TRACK_LABEL_WIDTH, th, QColor(43, 43, 43))
             painter.setPen(QPen(QColor(80, 80, 80), 1))
-            painter.drawLine(TRACK_LABEL_WIDTH - 1, y, TRACK_LABEL_WIDTH - 1, y + TRACK_HEIGHT)
+            painter.drawLine(TRACK_LABEL_WIDTH - 1, y, TRACK_LABEL_WIDTH - 1, y + th)
             painter.setPen(Qt.GlobalColor.white)
             painter.drawText(
-                QRect(8, y, TRACK_LABEL_WIDTH - 12, TRACK_HEIGHT),
+                QRect(8, y, TRACK_LABEL_WIDTH - 12, th),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 track.name,
             )
-            y += TRACK_HEIGHT + TRACK_GAP
+            y += th + TRACK_GAP

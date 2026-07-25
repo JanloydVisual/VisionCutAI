@@ -21,6 +21,7 @@ from ui.widgets.preview_toggle import PreviewToggle
 
 class VideoPreview(QWidget):
     target_object_selected = pyqtSignal(dict)
+    target_object_live_updated = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,8 +63,15 @@ class VideoPreview(QWidget):
         self.controls.reset_clicked.connect(self.viewer.reset_view)
         self.viewer.zoom_changed.connect(self.controls.set_zoom_label)
         self.viewer.target_object_selected.connect(self.target_object_selected.emit)
+        self.viewer.target_object_live_updated.connect(self.target_object_live_updated.emit)
         # Connect preview toggle
         self.preview_toggle.mode_changed.connect(self._on_preview_mode_changed)
+
+    def set_interactive_mask(self, mask, is_low_confidence: bool = False):
+        self.viewer.set_interactive_mask(mask, is_low_confidence)
+
+    def set_mask_mode(self, label: int):
+        self.viewer.set_mask_mode(label)
 
     def load_frame(self, pixmap: QPixmap, scale_factor: float = 1.0) -> None:
         self.viewer.load_frame(pixmap, scale_factor)
@@ -85,6 +93,9 @@ class VideoPreview(QWidget):
 
     def set_drawing_mode(self, enabled: bool) -> None:
         self.viewer.set_drawing_mode(enabled)
+
+    def set_prompt_mode(self, mode: str) -> None:
+        self.viewer.set_prompt_mode(mode)
 
     def fit_to_window(self) -> None:
         self.viewer.fit_to_window()

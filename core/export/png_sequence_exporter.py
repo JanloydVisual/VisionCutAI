@@ -26,10 +26,16 @@ class PngSequenceExporter:
     Runs in a background thread to keep UI responsive.
     """
 
-    def __init__(self, output_dir: str, processor=None, timeline=None):
+    def __init__(self, output_dir: str, processor=None, timeline=None, tracking_engine=None):
         self.output_dir = Path(output_dir)
         self.processor = processor  # Optional FrameProcessor (e.g., BackgroundRemovalProcessor)
         self.timeline = timeline
+        # Sprint: Audit 1.0 fix -- without this, export always used a single
+        # frozen sam_prompt snapshot instead of the per-frame tracked prompt
+        # that live preview and the render cache both correctly use, so
+        # exported output could look nothing like preview for any clip where
+        # the subject moves.
+        self.tracking_engine = tracking_engine
         self._stop_event = threading.Event()
         self._keep_frames_on_cancel = True
         self._thread = None
@@ -63,7 +69,7 @@ class PngSequenceExporter:
         success, frame = cap.read()
         return frame if success else None
 
-    def _process_frame(self, frame: np.ndarray) -> np.ndarray:
+    def _process_frame(self, frame: np.ndarray, custom_prompt=None) -> np.ndarray:
         """Apply background removal if processor is set, otherwise passthrough."""
         if self.processor is None:
             # Add alpha channel if no processor (RGBA passthrough)
@@ -71,7 +77,16 @@ class PngSequenceExporter:
             alpha = np.full((h, w, 1), 255, dtype=np.uint8)
             rgb = frame[:, :, ::-1]  # BGR to RGB
             return np.concatenate([rgb, alpha], axis=2)
-        return self.processor.process(frame)
+        return self.processor.process(frame, custom_prompt=custom_prompt)
+
+    def _tracked_prompt_for(self, source_frame: int):
+        """Look up the per-frame tracked SAM prompt for source_frame, the
+        same way live playback (AppController._process_frame) and the
+        render cache (AIRenderWorker) both do -- so export doesn't fall back
+        to a single frozen prompt snapshot for the whole clip."""
+        if self.tracking_engine is None:
+            return None
+        return self.tracking_engine.get_tracked_prompt(source_frame)
 
     def _save_png(self, frame: np.ndarray, frame_index: int) -> bool:
         """Save RGBA frame as PNG."""
@@ -231,6 +246,7 @@ class PngSequenceExporter:
                 self._current_frame = frame_idx
                 
                 frame = None
+                source_frame = frame_idx
                 if self.timeline is not None:
                     clip = self.timeline.clip_at_timeline_frame(frame_idx)
                     if clip is not None:
@@ -238,7 +254,7 @@ class PngSequenceExporter:
                         if clip.source_path not in caps:
                             cap = cv2.VideoCapture(clip.source_path)
                             caps[clip.source_path] = cap
-                        
+
                         frame = self._read_frame(caps[clip.source_path], source_frame)
                 else:
                     frame = self._read_frame(caps[video_path], frame_idx)
@@ -250,7 +266,7 @@ class PngSequenceExporter:
                     cv2.imwrite(str(output_path), bgra)
                     frames_exported += 1
                 else:
-                    processed = self._process_frame(frame)
+                    processed = self._process_frame(frame, custom_prompt=self._tracked_prompt_for(source_frame))
                     if processed is not None:
                         self._save_png(processed, frame_idx)
                         frames_exported += 1
