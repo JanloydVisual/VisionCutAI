@@ -10,7 +10,7 @@ QGraphicsView-based zoomable, pannable video viewer with:
 This class owns viewer/render state only. No knowledge of VideoEngine/Controller.
 """
 
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsPathItem, QGraphicsItemGroup, QGraphicsItem, QGraphicsRectItem
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsPathItem, QGraphicsItemGroup, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QPen, QWheelEvent, QMouseEvent, QPainterPath, QBrush
 
@@ -82,6 +82,8 @@ class ViewerWidget(QGraphicsView):
     comparison_changed = pyqtSignal(float)
     target_object_selected = pyqtSignal(dict)
     target_object_live_updated = pyqtSignal(dict)
+    refinement_hint_selected = pyqtSignal(object)
+
 
     MIN_ZOOM = 0.05
     MAX_ZOOM = 20.0
@@ -101,7 +103,12 @@ class ViewerWidget(QGraphicsView):
         self._processed_item = _ClippedPixmapItem(keep_right=True)
         self._processed_item.setZValue(1)
         self._scene.addItem(self._processed_item)
-
+        self._drawing_mode = False
+        self._mask_mode = 1
+        
+        # Sprint 31: Magic Mask active stroke item
+        self._active_stroke_item = None
+        
         # Initialize mask overlay item (for interactive selection)
         self._mask_overlay_item = QGraphicsPixmapItem()
         self._mask_overlay_item.setZValue(2.0)
@@ -146,35 +153,67 @@ class ViewerWidget(QGraphicsView):
         self._zoom_factor = 1.0
         self._last_frame_size = None
 
-        self._panning = False
-        self._pan_start = None
-
         self._comparison_fraction = 0.5
-        self._comparison_dragging = False
         self._has_processed_frame = False
 
         # Preview mode: 'original', 'split', 'ai'
         self._preview_mode = "original"
 
         self._drawing_mode = False
-        self._prompt_mode = "stroke"
-        self._draw_start = None
-        self._path_item = QGraphicsPathItem()
-        self._path_item.setZValue(10)
-        self._scene.addItem(self._path_item)
-        self._path_item.hide()
+        self._prompt_mode = "point"
+
+        # Initialize global tools
+        from ui.tools.pan_tool import PanToolState
+        from ui.tools.zoom_tool import ZoomToolState
+        from ui.tools.comparison_tool import ComparisonToolState
+        from ui.tools.brush_tool import BrushToolState
+        from ui.tools.rectangle_tool import RectangleToolState
+        from ui.tools.point_tool import PointToolState
+
+        self._pan_tool = PanToolState()
+        self._pan_tool.activate(self)
+        
+        self._zoom_tool = ZoomToolState()
+        self._zoom_tool.activate(self)
+        
+        self._comparison_tool = ComparisonToolState()
+        self._comparison_tool.activate(self)
+
+        self._editing_tools = {
+            "stroke": BrushToolState(),
+            "box": RectangleToolState(),
+            "point": PointToolState()
+        }
+        self._active_tool = self._editing_tools["point"]
+
+    # ---------------- Tool State Management ----------------
+
+    def add_temp_item(self, item) -> None:
+        self._scene.addItem(item)
+        
+    def remove_temp_item(self, item) -> None:
+        if item in self._scene.items():
+            self._scene.removeItem(item)
 
     # ---------------- Frame updates ----------------
 
     def set_drawing_mode(self, enabled: bool):
         self._drawing_mode = enabled
         if enabled:
-            self.setCursor(Qt.CursorShape.CrossCursor)
+            if self._active_tool:
+                self._active_tool.activate(self)
         else:
+            if self._active_tool:
+                self._active_tool.cancel()
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def set_prompt_mode(self, mode: str):
+        if self._active_tool:
+            self._active_tool.deactivate()
         self._prompt_mode = mode
+        self._active_tool = self._editing_tools.get(mode)
+        if self._drawing_mode and self._active_tool:
+            self._active_tool.activate(self)
 
     def load_frame(self, pixmap: QPixmap, scale_factor: float = 1.0) -> None:
         """Sets the original frame. Also mirrors to the processed layer until an AI engine calls set_processed_frame() explicitly, so the comparison slider is always functional."""
@@ -244,6 +283,8 @@ class ViewerWidget(QGraphicsView):
             print("Error: Mask must be a 2D array")
             return
 
+        print(f"[VIEWER RENDERING] mask dimensions: {mask.shape}, alpha pixel count: {mask.sum()}, viewer update call")
+
         h, w = mask.shape
         import cv2
         from PyQt6.QtGui import QImage, QPixmap
@@ -251,6 +292,11 @@ class ViewerWidget(QGraphicsView):
         # Debug layer: raw MobileSAM mask, before any post-processing.
         self._set_debug_grayscale_layer(self._debug_raw_mask_item, mask, h, w, (255, 80, 80))
 
+        # Sprint 31: Remove active stroke item gracefully
+        if hasattr(self, '_active_stroke_item') and self._active_stroke_item:
+            self.remove_temp_item(self._active_stroke_item)
+            self._active_stroke_item = None
+            
         # 1. Edge cleanup (Morphological closing to remove small holes)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
@@ -406,6 +452,39 @@ class ViewerWidget(QGraphicsView):
                 rect_item.setParentItem(self._original_item)
                 self._interactive_items.append(rect_item)
 
+    def set_refinement_hints(self, hints: list):
+        if not hasattr(self, '_hint_items'):
+            self._hint_items = []
+            
+        for item in self._hint_items:
+            self._scene.removeItem(item)
+        self._hint_items.clear()
+        
+        for hint in hints:
+            # Type is core.ai.models.RefinementHint
+            # hint.position is (x, y)
+            scale_factor = 1.0 / self._original_item.scale() if self._original_item.scale() > 0 else 1.0
+            cx, cy = hint.position
+            scene_x = cx * scale_factor
+            scene_y = cy * scale_factor
+            
+            radius = 6 * scale_factor
+            ellipse = QGraphicsEllipseItem(QRectF(QPointF(scene_x - radius, scene_y - radius), QPointF(scene_x + radius, scene_y + radius)))
+            
+            color = QColor(255, 50, 50) # default RED for negative
+            if hint.hint_type.name == "ADD_POSITIVE":
+                color = QColor(40, 210, 80) # GREEN for positive
+                
+            pen = QPen(color, 2)
+            pen.setCosmetic(True)
+            ellipse.setPen(pen)
+            ellipse.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 180)))
+            ellipse.setZValue(15.0)
+            ellipse.setParentItem(self._original_item)
+            ellipse._hint = hint  # attach data for hit-testing
+            self._hint_items.append(ellipse)
+
+
     def set_preview_mode(self, mode: str) -> None:
         """Set preview mode ('original', 'split', 'ai')."""
         self._preview_mode = mode
@@ -507,209 +586,69 @@ class ViewerWidget(QGraphicsView):
         scene_point = QPointF(scene_x, self._last_frame_size.height() / 2)
         return self.mapFromScene(scene_point).x()
 
-    # ---------------- Mouse events (zoom / pan / comparison drag) ----------------
+    # ---------------- Mouse events (delegated to tools) ----------------
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        self._apply_zoom_step(event.angleDelta().y())
-        event.accept()
+        if self._zoom_tool.on_wheel(event):
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        if getattr(self, '_drawing_box', False) and event.button() == Qt.MouseButton.RightButton:
-            self._drawing_box = False
-            self._scene.removeItem(self._temp_box_item)
-            self._temp_box_item = None
-            event.accept()
-            return
-            
-        if getattr(self, '_drawing_stroke', False) and event.button() != self._stroke_button:
-            self._drawing_stroke = False
-            self._scene.removeItem(self._temp_stroke_item)
-            self._temp_stroke_item = None
-            event.accept()
-            return
-
-        if getattr(self, '_drawing_mode', False) and getattr(self, '_prompt_mode', 'stroke') == 'stroke' and event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-            # mapToScene() already returns coordinates in the scene's
-            # logical (original-frame) coordinate system -- the scene rect
-            # is explicitly set to logical_size in load_frame(), and
-            # _original_item's own .scale() exists precisely so its
-            # on-screen footprint matches that regardless of preview_scale.
-            # No further scaling belongs here (bug fix: this used to
-            # multiply by preview_scale, silently shrinking every prompt
-            # coordinate toward the origin whenever preview quality was
-            # anything but "Full Resolution" -- invisible at the default
-            # 1.0 scale, badly wrong at Half/Quarter Resolution).
-            scene_pos = self.mapToScene(event.position().toPoint())
-            px = scene_pos.x()
-            py = scene_pos.y()
-
-            self._drawing_stroke = True
-            self._stroke_points = [[px, py]]
-            self._stroke_button = event.button()
-            
-            # Start drawing temporary stroke
-            mask_mode = getattr(self, '_mask_mode', 1)
-            label = mask_mode if event.button() == Qt.MouseButton.LeftButton else (1 if mask_mode == 0 else 0)
-            self._stroke_label = label
-            color = QColor(40, 210, 80) if label == 1 else QColor(255, 50, 50)
-            
-            self._temp_path = QPainterPath()
-            self._temp_path.moveTo(scene_pos.x(), scene_pos.y())
-            self._temp_stroke_item = QGraphicsPathItem(self._temp_path)
-            
-            pen = QPen(color, 4)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            pen.setCosmetic(True)
-            self._temp_stroke_item.setPen(pen)
-            self._temp_stroke_item.setZValue(15)
-            self._scene.addItem(self._temp_stroke_item)
-            
-            event.accept()
-            return
-            
-        if getattr(self, '_drawing_mode', False) and getattr(self, '_prompt_mode', 'stroke') == 'box' and event.button() == Qt.MouseButton.LeftButton:
-            # See the stroke branch above for why no scale_factor is applied.
-            scene_pos = self.mapToScene(event.position().toPoint())
-
-            self._drawing_box = True
-            self._box_start_scene = scene_pos
-            self._box_start_logical = [scene_pos.x(), scene_pos.y()]
-            
-            self._temp_box_item = QGraphicsRectItem(QRectF(scene_pos, scene_pos))
-            pen = QPen(QColor(40, 210, 80), 2)
-            pen.setCosmetic(True)
-            self._temp_box_item.setPen(pen)
-            self._temp_box_item.setBrush(QBrush(QColor(40, 210, 80, 50)))
-            self._temp_box_item.setZValue(15)
-            self._scene.addItem(self._temp_box_item)
-            
-            event.accept()
-            return
-
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = True
-            self._pan_start = event.position()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            event.accept()
-            return
-
         if event.button() == Qt.MouseButton.LeftButton:
-            x = self._divider_viewport_x()
-            if x is not None and self._preview_mode == "split":
-                hit_rect = QRectF(x - self.HANDLE_HIT_TOLERANCE, 0, self.HANDLE_HIT_TOLERANCE * 2, self.viewport().height())
-                if hit_rect.contains(event.position()):
-                    self.setCursor(Qt.CursorShape.SizeHorCursor)
-                    self._comparison_dragging = True
+            scene_pos = self.mapToScene(event.pos())
+            items = self._scene.items(scene_pos)
+            for item in items:
+                if hasattr(item, '_hint'):
+                    self.refinement_hint_selected.emit(item._hint)
                     event.accept()
                     return
 
+        print(f"[STROKE] mouse press coordinates: {event.pos().x()}, {event.pos().y()}")
+        print(f"[COORDINATES] viewer: {event.pos()}, frame: {self.mapToScene(event.pos())}, resolution: {self._last_frame_size}")
+
+        if self._comparison_tool.on_mouse_press(event) or \
+           self._pan_tool.on_mouse_press(event) or \
+           self._zoom_tool.on_mouse_press(event) or \
+           (self._drawing_mode and self._active_tool and self._active_tool.on_mouse_press(event)):
+            event.accept()
+            return
         super().mousePressEvent(event)
 
+
     def mouseMoveEvent(self, event) -> None:
-        if getattr(self, '_drawing_stroke', False):
-            # See mousePressEvent's stroke branch for why no scale_factor.
-            scene_pos = self.mapToScene(event.position().toPoint())
-            px = scene_pos.x()
-            py = scene_pos.y()
-
-            self._stroke_points.append([px, py])
-            self._temp_path.lineTo(scene_pos.x(), scene_pos.y())
-            self._temp_stroke_item.setPath(self._temp_path)
-
-            # Live preview: report the in-progress stroke so the controller
-            # can debounce a background regenerate while the user is still
-            # dragging. Cheap to emit on every move -- the controller-side
-            # debounce timer, not this call site, controls inference rate.
-            self.target_object_live_updated.emit({
-                'type': 'stroke',
-                'data': list(self._stroke_points),
-                'label': getattr(self, '_stroke_label', 1),
-            })
-
-            event.accept()
-            return
+        if hasattr(self, '_active_tool') and hasattr(self._active_tool, '_stroke_points'):
+            print(f"[STROKE] mouse move point count: {len(self._active_tool._stroke_points)}")
             
-        if getattr(self, '_drawing_box', False):
-            scene_pos = self.mapToScene(event.position().toPoint())
-            rect = QRectF(self._box_start_scene, scene_pos).normalized()
-            self._temp_box_item.setRect(rect)
+        if self._comparison_tool.on_mouse_move(event) or \
+           self._pan_tool.on_mouse_move(event) or \
+           self._zoom_tool.on_mouse_move(event) or \
+           (self._drawing_mode and self._active_tool and self._active_tool.on_mouse_move(event)):
             event.accept()
             return
-            
-        if self._comparison_dragging and self._last_frame_size is not None:
-            scene_pos = self.mapToScene(event.position().toPoint())
-            fraction = scene_pos.x() / self._last_frame_size.width()
-            self._set_comparison_fraction(fraction)
-            event.accept()
-            return
-
-        if getattr(self, '_panning', False) and getattr(self, '_pan_start', None) is not None:
-            delta = event.position() - self._pan_start
-            self.horizontalScrollBar().setValue(int(self.horizontalScrollBar().value() - delta.x()))
-            self.verticalScrollBar().setValue(int(self.verticalScrollBar().value() - delta.y()))
-            self._pan_start = event.position()
-            event.accept()
-            return
-
         super().mouseMoveEvent(event)
-        
+
     def mouseReleaseEvent(self, event) -> None:
-        if getattr(self, '_drawing_stroke', False):
-            self._drawing_stroke = False
-            self._scene.removeItem(self._temp_stroke_item)
-            self._temp_stroke_item = None
+        if hasattr(self, '_active_tool') and hasattr(self._active_tool, '_stroke_points'):
+            print(f"[STROKE] mouse release point count: {len(self._active_tool._stroke_points)}")
             
-            mask_mode = getattr(self, '_mask_mode', 1)
-            label = mask_mode if self._stroke_button == Qt.MouseButton.LeftButton else (1 if mask_mode == 0 else 0)
-            
-            if len(self._stroke_points) > 0:
-                self.target_object_selected.emit({
-                    'type': 'stroke',
-                    'data': self._stroke_points,
-                    'label': label
-                })
-            
+        if self._comparison_tool.on_mouse_release(event) or \
+           self._pan_tool.on_mouse_release(event) or \
+           self._zoom_tool.on_mouse_release(event) or \
+           (self._drawing_mode and self._active_tool and self._active_tool.on_mouse_release(event)):
             event.accept()
             return
-            
-        if getattr(self, '_drawing_box', False):
-            self._drawing_box = False
-            self._scene.removeItem(self._temp_box_item)
-            self._temp_box_item = None
-            
-            # See mousePressEvent's stroke branch for why no scale_factor.
-            scene_pos = self.mapToScene(event.position().toPoint())
-            end_logical = [scene_pos.x(), scene_pos.y()]
-            
-            x1 = min(self._box_start_logical[0], end_logical[0])
-            y1 = min(self._box_start_logical[1], end_logical[1])
-            x2 = max(self._box_start_logical[0], end_logical[0])
-            y2 = max(self._box_start_logical[1], end_logical[1])
-            
-            # Box mode always acts as Keep (label 1)
-            self.target_object_selected.emit({
-                'type': 'rectangle',
-                'data': [x1, y1, x2, y2],
-                'label': 1
-            })
-            
-            event.accept()
-            return
-            
-        if event.button() == Qt.MouseButton.MiddleButton and getattr(self, '_panning', False):
-            self._panning = False
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            event.accept()
-            return
-
-        if event.button() == Qt.MouseButton.LeftButton and getattr(self, '_comparison_dragging', False):
-            self._comparison_dragging = False
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            event.accept()
-            return
-
         super().mouseReleaseEvent(event)
+        
+    def set_active_stroke_item(self, item):
+        """Called by brush_tool on mouse release to keep the stroke visible while AI computes."""
+        self._active_stroke_item = item
+        # We might want to fade or animate it, but for now we just hold onto it.
+        # Ensure it stays on top.
+        item.setZValue(20)
+        
+        if hasattr(self.window(), 'status'):
+            self.window().status.showMessage("AI Processing...", 2000)
 
     # ---------------- Divider overlay paint ----------------
 

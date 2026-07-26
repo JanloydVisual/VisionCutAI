@@ -64,8 +64,11 @@ class InteractiveMaskWorker(QThread):
                 # render-cache pass (many frames, genuinely throughput-
                 # sensitive) is unaffected and keeps using the user's chosen
                 # quality setting.
+                print("[INTERACTIVE MASK WORKER] inference started")
                 rgba = processor.process(frame, custom_prompt=prompts, quality_override="Best")
+                print("[INTERACTIVE MASK WORKER] inference completed")
                 alpha = rgba[:, :, 3]
+                print(f"[INTERACTIVE MASK WORKER] mask size: {alpha.shape}")
             except Exception:
                 alpha = None
 

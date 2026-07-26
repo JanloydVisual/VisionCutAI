@@ -1,9 +1,9 @@
 import unittest
 
-from core.clip import Clip
+from core.timeline.clip import Clip
 from core.edit_history import EditHistory
 from core.signals import Signal
-from core.timeline import Timeline
+from core.timeline.timeline import Timeline
 from core.timeline_playback import TimelinePlayback, PlaybackPosition
 
 

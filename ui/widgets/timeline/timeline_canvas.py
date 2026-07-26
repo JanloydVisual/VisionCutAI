@@ -181,6 +181,13 @@ class TimelineCanvas(QWidget):
         painter.setPen(Qt.GlobalColor.white)
         painter.drawText(text_x, text_y, text)
 
+    def _draw_empty_state(self, painter):
+        painter.save()
+        painter.setPen(QColor(150, 150, 150))
+        painter.setFont(QFont("Segoe UI", 14))
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Import media to begin editing")
+        painter.restore()
+
     def _draw_track_background(self, painter, y, track):
         # This widget's local x=0 already lines up with canvas content
         # x=0 (TrackHeaderColumn lives outside this widget, in its own
@@ -194,8 +201,20 @@ class TimelineCanvas(QWidget):
         painter.fillRect(self.rect(), QColor(36, 36, 36))
 
         if self.timeline is None:
+            self._draw_empty_state(painter)
             return
-
+            
+        # Check if timeline has any clips
+        has_clips = False
+        for track in self.timeline.tracks:
+            if getattr(track, "clips", []):
+                has_clips = True
+                break
+                
+        if not has_clips:
+            self._draw_empty_state(painter)
+            return
+            
         y = TRACK_START_Y
         for track in self.timeline.tracks:
             self._draw_track_background(painter, y, track)

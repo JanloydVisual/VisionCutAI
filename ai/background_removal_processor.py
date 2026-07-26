@@ -3,105 +3,18 @@ Background-removal processor using rembg and ONNX Runtime.
 """
 
 import math
+import threading
 
 import numpy as np
 
 from core.frame_processor import FrameProcessor
 
 
-def _perpendicular_distance(pt, line_start, line_end):
-    x0, y0 = pt
-    x1, y1 = line_start
-    x2, y2 = line_end
-    dx, dy = x2 - x1, y2 - y1
-    if dx == 0 and dy == 0:
-        return math.hypot(x0 - x1, y0 - y1)
-    t = ((x0 - x1) * dx + (y0 - y1) * dy) / (dx * dx + dy * dy)
-    proj_x, proj_y = x1 + t * dx, y1 + t * dy
-    return math.hypot(x0 - proj_x, y0 - proj_y)
-
-
-def _rdp_simplify(points, epsilon):
-    """Ramer-Douglas-Peucker polyline simplification: keeps points that
-    deviate from the straight-line chord by more than `epsilon`, drops ones
-    that don't. Straight runs collapse to their two endpoints; corners and
-    curves keep whatever points are needed to represent them."""
-    if len(points) < 3:
-        return list(points)
-
-    max_dist, index = 0.0, 0
-    for i in range(1, len(points) - 1):
-        d = _perpendicular_distance(points[i], points[0], points[-1])
-        if d > max_dist:
-            max_dist, index = d, i
-
-    if max_dist > epsilon:
-        left = _rdp_simplify(points[:index + 1], epsilon)
-        right = _rdp_simplify(points[index:], epsilon)
-        return left[:-1] + right
-    return [points[0], points[-1]]
-
-
-def sample_stroke_points(points, min_points=2, max_points=20, spacing_px=20.0):
-    """
-    Reduce a freehand stroke to a geometry-aware set of SAM prompt points.
-
-    A length-based budget (~1 point per `spacing_px`, clamped to
-    [min_points, max_points]) sets how many points we're willing to spend.
-    Which points get kept is decided by Ramer-Douglas-Peucker simplification,
-    so a long straight stroke collapses toward its two endpoints (SAM doesn't
-    need 20 points to describe a straight edge) while a curved or cornered
-    stroke of the same length spends the same budget on the points that
-    actually describe its shape. Always ends on the stroke's last point.
-    """
-    if not points:
-        return []
-    if len(points) <= 2:
-        return list(points)
-    max_points = max(max_points, 1)  # guard: division below assumes > 0
-
-    total_length = 0.0
-    for j in range(1, len(points)):
-        p1, p2 = points[j - 1], points[j]
-        total_length += math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-
-    target_count = max(min_points, min(max_points, int(total_length / spacing_px)))
-    if len(points) <= target_count:
-        return list(points)
-
-    # Binary-search an epsilon that lands RDP's output close to target_count.
-    # Smaller epsilon keeps more points; larger epsilon keeps fewer.
-    lo, hi = 0.0, max(total_length, 1.0)
-    best = [points[0], points[-1]]
-    for _ in range(20):
-        mid = (lo + hi) / 2.0
-        simplified = _rdp_simplify(points, mid)
-        if abs(len(simplified) - target_count) < abs(len(best) - target_count):
-            best = simplified
-        if len(simplified) > target_count:
-            lo = mid
-        else:
-            hi = mid
-
-    sampled = best
-
-    # RDP can still overshoot the budget on very jagged input -- thin evenly
-    # while preserving the endpoints.
-    if len(sampled) > max_points:
-        step = len(sampled) / max_points
-        sampled = [sampled[int(i * step)] for i in range(max_points)]
-        if sampled[-1] != points[-1]:
-            sampled[-1] = points[-1]
-
-    # A near-straight stroke can simplify below the minimum floor; pad back
-    # up with uniform samples in that case.
-    if len(sampled) < min_points and len(points) >= min_points:
-        step = max(1, len(points) // min_points)
-        sampled = points[::step][:min_points]
-        if sampled[-1] != points[-1]:
-            sampled[-1] = points[-1]
-
-    return sampled
+# Sprint P1: thread-local sidecar so patched_sam_predict can return every
+# raw candidate alpha to BackgroundRemovalProcessor.process() without
+# modifying rembg's public `remove()` API.  patched_sam_predict populates
+# this before returning; process() reads it immediately after remove() exits.
+_sam_candidate_sidecar = threading.local()
 
 
 def patched_sam_predict(self, img, *args, **kwargs):
@@ -155,33 +68,28 @@ def patched_sam_predict(self, img, *args, **kwargs):
     inv_transform_matrix = np.linalg.inv(transform_matrix)
     masks = transform_masks(masks, original_size, inv_transform_matrix)
 
-    mask = np.zeros((masks.shape[2], masks.shape[3], 3), dtype=np.uint8)
+    # Sprint P1: store every raw binary candidate in the thread-local sidecar
+    # so BackgroundRemovalProcessor.process() can retrieve them for ranking.
+    # We still return only the highest-IoU mask to rembg's post-processing
+    # pipeline so nothing downstream of `remove()` needs to change.
+    #
+    # Sprint P3: use the session-level threshold for binarisation so the
+    # benchmark sweep can sweep logit thresholds without reloading the model.
+    threshold = getattr(self, '_mask_threshold', 0.0)
+    candidate_alphas = []
+    for idx in range(masks.shape[1]):
+        binary = (masks[0, idx, :, :] > threshold).astype(np.uint8) * 255
+        candidate_alphas.append(binary)
+    _sam_candidate_sidecar.candidates = candidate_alphas
 
-    # Fix: Only use the mask with the highest IoU prediction instead of unioning everything
-    best_mask_idx = np.argmax(iou_preds[0])
-    best_mask = masks[0, best_mask_idx, :, :]
-    binary_mask = (best_mask > 0.0).astype(np.uint8)
-
-    # Sprint 32B: at SAM's standard 0.0-logit threshold, textured/complex
-    # backgrounds (grass, thin objects) can produce scattered small
-    # false-positive regions well away from the prompted object, alongside
-    # the correct detection. A single point/box/stroke prompt describes ONE
-    # object, so drop components that are much smaller than the largest one
-    # -- a real object can legitimately split into a couple of pieces
-    # (occlusion), but noise specks are reliably far smaller than that.
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_mask)
-    if num_labels > 2:
-        areas = stats[1:, cv2.CC_STAT_AREA]
-        max_area = areas.max()
-        keep_labels = set(int(i) + 1 for i in np.where(areas >= max_area * 0.2)[0])
-        binary_mask = np.isin(labels, list(keep_labels)).astype(np.uint8)
-
-    mask[binary_mask > 0] = [255, 255, 255]
-
-    return [Image.fromarray(mask).convert("L")]
+    # Return the best-IoU candidate to rembg so its RGBA compositing works
+    best_idx = int(np.argmax(iou_preds[0]))
+    best_binary = candidate_alphas[best_idx]
+    mask_rgb = np.stack([best_binary, best_binary, best_binary], axis=2)
+    return [Image.fromarray(mask_rgb).convert("L")]
 
 
-def _fix_sam_session_gpu_providers(session, providers):
+def _fix_sam_session_gpu_providers(session, providers, sam_model='mobile_sam'):
     """
     C2 (Magic Mask roadmap): rembg's SamSession.__init__ constructs its
     encoder/decoder ONNX Runtime sessions WITHOUT ever passing a `providers`
@@ -197,7 +105,7 @@ def _fix_sam_session_gpu_providers(session, providers):
     """
     import onnxruntime as ort
     try:
-        paths = session.__class__.download_models(sam_model='mobile_sam')
+        paths = session.__class__.download_models(sam_model=sam_model)
         session.encoder = ort.InferenceSession(str(paths[0]), providers=providers)
         session.decoder = ort.InferenceSession(str(paths[1]), providers=providers)
     except Exception as error:
@@ -274,19 +182,35 @@ class BackgroundRemovalProcessor(FrameProcessor):
         providers = self._resolve_providers()
         self.device_label = "GPU" if "CUDAExecutionProvider" in providers else "CPU"
         if model_name == "sam":
-            self._session = new_session(model_name, sam_model='mobile_sam', providers=providers)
+            self._session = new_session("sam", sam_model='mobile_sam', providers=providers)
+        elif model_name == "sam_base":
+            self._session = new_session("sam", sam_model='sam_vit_b_01ec64', providers=providers)
         else:
             self._session = new_session(model_name, providers=providers)
 
-        if model_name == "sam":
-            _fix_sam_session_gpu_providers(self._session, providers)
+        if model_name in ("sam", "sam_base"):
+            sam_model_str = 'mobile_sam' if model_name == "sam" else 'sam_vit_b_01ec64'
+            _fix_sam_session_gpu_providers(self._session, providers, sam_model=sam_model_str)
             self._session.predict = types.MethodType(patched_sam_predict, self._session)
+            # Sprint P3: initialise threshold on the session so patched_sam_predict
+            # can read it without touching the global namespace.
+            self._session._mask_threshold = 0.0
             _warmup_sam_session(self._session)
         
     def set_quality(self, quality: str):
         with self.lock:
             self.quality = quality
-        
+
+    def set_mask_threshold(self, threshold: float):
+        """Sprint P3: set the logit binarisation threshold used by patched_sam_predict.
+        Values below 0.0 expand the mask (recover thin/small regions at the cost
+        of background leakage); values above 0.0 contract it.
+        Only effective when the active model is SAM / MobileSAM.
+        """
+        with self.lock:
+            if hasattr(self, '_session') and self._session is not None:
+                self._session._mask_threshold = float(threshold)
+
     def set_model(self, model_name: str):
         """Dynamically switch the active AI model."""
         with self.lock:
@@ -308,17 +232,14 @@ class BackgroundRemovalProcessor(FrameProcessor):
                         mobile_decoder = os.path.join(u2net_home, 'mobile_sam.decoder.onnx')
                         if not os.path.exists(mobile_decoder):
                             sam_decoder = os.path.join(u2net_home, 'sam_vit_b_01ec64.decoder.onnx')
-                            if os.path.exists(sam_decoder):
-                                shutil.copy(sam_decoder, mobile_decoder)
-                            else:
-                                import urllib.request
-                                print("Downloading MobileSAM decoder...")
-                                urllib.request.urlretrieve('https://github.com/danielgatis/rembg/releases/download/v0.0.0/sam_vit_b_01ec64.decoder.onnx', mobile_decoder)
+                    if model_name == "sam" or model_name == "sam_base":
+                        from rembg import new_session
                         
-                        # Load MobileSAM using rembg
+                        # Load SAM using rembg
                         resolved_providers = self._resolve_providers()
-                        self._session = new_session(model_name, sam_model='mobile_sam', providers=resolved_providers)
-                        _fix_sam_session_gpu_providers(self._session, resolved_providers)
+                        sam_model_str = 'mobile_sam' if model_name == "sam" else 'sam_vit_b_01ec64'
+                        self._session = new_session("sam", sam_model=sam_model_str, providers=resolved_providers)
+                        _fix_sam_session_gpu_providers(self._session, resolved_providers, sam_model=sam_model_str)
 
                         # Bug fix (Sprint 32B): this branch used to leave the
                         # session's predict() as rembg's stock SAM implementation
@@ -331,6 +252,11 @@ class BackgroundRemovalProcessor(FrameProcessor):
                         # false-positive components) were never actually running.
                         import types
                         self._session.predict = types.MethodType(patched_sam_predict, self._session)
+                        # Sprint P3: propagate current threshold to the new session
+                        current_threshold = getattr(
+                            self._session, '_mask_threshold', 0.0
+                        ) if self._session else 0.0
+                        self._session._mask_threshold = current_threshold
                         _warmup_sam_session(self._session)
                     else:
                         self._session = new_session(model_name, providers=self._resolve_providers())
@@ -411,54 +337,60 @@ class BackgroundRemovalProcessor(FrameProcessor):
                 new_w, new_h = int(w * proxy_scale), int(h * proxy_scale)
                 rgb_small = cv2.resize(rgb_frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
                 
-                # Scale prompt points
+                # Prompts are already scaled and flattened by InferencePromptAdapter
                 active_prompt = custom_prompt if custom_prompt is not None else self.sam_prompt
                 if active_prompt:
-                    import copy
-                    flat_prompt = []
-                    for prompt in copy.deepcopy(active_prompt):
-                        if prompt['type'] == 'stroke':
-                            pts = prompt['data']
-                            if len(pts) > 0:
-                                for pt in sample_stroke_points(pts):
-                                    flat_prompt.append({'type': 'point', 'data': [int(v * proxy_scale) for v in pt], 'label': prompt['label']})
-                        elif prompt['type'] in ('point', 'rectangle'):
-                            prompt['data'] = [int(v * proxy_scale) for v in prompt['data']]
-                            flat_prompt.append(prompt)
-
-                    print(f"[DEBUG] Processing {quality_mode} scale SAM prompt with {len(flat_prompt)} points")
+                    print(f"[DEBUG] Processing {quality_mode} scale SAM prompt with {len(active_prompt)} points")
+                    # Clear sidecar before inference so a stale value is never used
+                    _sam_candidate_sidecar.candidates = None
                     with self.lock:
-                        rgba_result = remove(rgb_small, session=self._session, sam_prompt=flat_prompt)
+                        rgba_result = remove(rgb_small, session=self._session, sam_prompt=active_prompt)
+
+                    # Retrieve all raw candidates written by patched_sam_predict
+                    raw_candidates = getattr(_sam_candidate_sidecar, 'candidates', None)
+                    if raw_candidates and len(raw_candidates) > 1:
+                        # Scale every candidate alpha back to full resolution
+                        scaled_candidates = []
+                        for raw_alpha in raw_candidates:
+                            alpha_large = cv2.resize(raw_alpha, (w, h), interpolation=cv2.INTER_LINEAR)
+                            scaled_candidates.append(
+                                np.concatenate([rgb_frame, alpha_large[..., np.newaxis]], axis=2)
+                            )
+                        return scaled_candidates
+                    else:
+                        # Fallback: single RGBA from rembg
+                        alpha_small = rgba_result[:, :, 3]
+                        alpha_large = cv2.resize(alpha_small, (w, h), interpolation=cv2.INTER_LINEAR)
+                        return [np.concatenate([rgb_frame, alpha_large[..., np.newaxis]], axis=2)]
                 else:
                     with self.lock:
                         rgba_result = remove(rgb_small, session=self._session)
-                        
-                # Extract alpha mask and scale back
-                alpha_small = rgba_result[:, :, 3]
-                alpha_large = cv2.resize(alpha_small, (w, h), interpolation=cv2.INTER_LINEAR)
-                return np.concatenate([rgb_frame, alpha_large[..., np.newaxis]], axis=2)
+                    alpha_small = rgba_result[:, :, 3]
+                    alpha_large = cv2.resize(alpha_small, (w, h), interpolation=cv2.INTER_LINEAR)
+                    return [np.concatenate([rgb_frame, alpha_large[..., np.newaxis]], axis=2)]
             else:
                 active_prompt = custom_prompt if custom_prompt is not None else self.sam_prompt
                 if active_prompt:
-                    import copy
-                    flat_prompt = []
-                    for prompt in copy.deepcopy(active_prompt):
-                        if prompt['type'] == 'stroke':
-                            pts = prompt['data']
-                            if len(pts) > 0:
-                                for pt in sample_stroke_points(pts):
-                                    flat_prompt.append({'type': 'point', 'data': [int(v) for v in pt], 'label': prompt['label']})
-                        elif prompt['type'] in ('point', 'rectangle'):
-                            prompt['data'] = [int(v) for v in prompt['data']]
-                            flat_prompt.append(prompt)
-
-                    print(f"[DEBUG] Processing full scale SAM prompt with {len(flat_prompt)} points")
+                    print(f"[DEBUG] Processing full scale SAM prompt with {len(active_prompt)} points")
+                    _sam_candidate_sidecar.candidates = None
                     with self.lock:
-                        rgba_result = remove(rgb_frame, session=self._session, sam_prompt=flat_prompt)
+                        rgba_result = remove(rgb_frame, session=self._session, sam_prompt=active_prompt)
+
+                    raw_candidates = getattr(_sam_candidate_sidecar, 'candidates', None)
+                    if raw_candidates and len(raw_candidates) > 1:
+                        result_list = []
+                        for raw_alpha in raw_candidates:
+                            result_list.append(
+                                np.concatenate([rgb_frame, raw_alpha[..., np.newaxis]], axis=2)
+                            )
+                        return result_list
+                    else:
+                        return [np.concatenate([rgb_frame, rgba_result[:, :, 3][..., np.newaxis]], axis=2)]
                 else:
                     with self.lock:
                         rgba_result = remove(rgb_frame, session=self._session)
-                        
+                    return [np.concatenate([rgb_frame, rgba_result[:, :, 3][..., np.newaxis]], axis=2)]
+
             end_time = time.perf_counter()
             inference_time_ms = (end_time - start_time) * 1000
             preview_fps = 1000.0 / inference_time_ms if inference_time_ms > 0 else 0
@@ -471,10 +403,9 @@ class BackgroundRemovalProcessor(FrameProcessor):
             print(f"Preview FPS: {preview_fps:.1f}")
             print(f"-------------------")
             
-            return rgba_result
         except Exception as e:
             # Preserve video playback if one frame fails to process.
             h, w = frame.shape[:2]
             rgb_frame = frame[:, :, ::-1]
             alpha = np.full((h, w, 1), 255, dtype=np.uint8)
-            return np.concatenate([rgb_frame, alpha], axis=2)
+            return [np.concatenate([rgb_frame, alpha], axis=2)]

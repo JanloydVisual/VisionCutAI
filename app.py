@@ -132,6 +132,8 @@ def main():
     
     app = QApplication(sys.argv)
     
+    from ui.theme import get_stylesheet
+    app.setStyleSheet(get_stylesheet())    
     splash = ModernSplashScreen(__version__)
     splash.show()
     

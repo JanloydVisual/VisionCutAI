@@ -32,9 +32,11 @@ class VideoPlayerWidget(QWidget):
     render_priority_changed = pyqtSignal(str)
     
     target_object_toggled = pyqtSignal(bool)
+    comparison_changed = pyqtSignal(float)
     prompt_mode_changed = pyqtSignal(str)
     target_object_selected = pyqtSignal(dict)
     target_object_live_updated = pyqtSignal(dict)
+    refinement_hint_selected = pyqtSignal(object)
     clear_prompts_clicked = pyqtSignal()
     undo_prompt_clicked = pyqtSignal()
     apply_target_clicked = pyqtSignal()
@@ -93,7 +95,9 @@ class VideoPlayerWidget(QWidget):
         
         self.preview.target_object_selected.connect(self.target_object_selected.emit)
         self.preview.target_object_live_updated.connect(self.target_object_live_updated.emit)
+        self.preview.viewer.refinement_hint_selected.connect(self.refinement_hint_selected.emit)
 
+        # Timeline connections
         self.timeline.frame_scrubbed.connect(self.frame_scrubbed.emit)
         self.timeline.next_frame_clicked.connect(self.next_frame_clicked.emit)
         self.timeline.previous_frame_clicked.connect(self.previous_frame_clicked.emit)
@@ -106,6 +110,9 @@ class VideoPlayerWidget(QWidget):
         self.preview.viewer.set_interactive_points(points)
         self._has_interactive_points = len(points) > 0
         self._update_apply_target_enabled()
+
+    def set_refinement_hints(self, hints):
+        self.preview.viewer.set_refinement_hints(hints)
 
     def set_interactive_busy(self, busy: bool) -> None:
         """A regenerate is in flight on the background worker -- disable

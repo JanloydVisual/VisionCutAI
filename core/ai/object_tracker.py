@@ -2,8 +2,8 @@ import cv2
 import numpy as np
 from typing import Tuple, Optional, List
 from dataclasses import dataclass
-from core.ai.trackers.csrt_tracker import CSRTTracker
 from core.ai.trackers.base_tracker import BaseTracker
+from core.tracking.tracker_factory import TrackerFactory
 
 @dataclass
 class TrackedFrameState:
@@ -77,8 +77,8 @@ class ObjectTracker:
             bh = max(1, min(bh, sh - y))
             clamped_bbox = (x, y, bw, bh)
 
-            # Create a fresh tracker instance (CSRT by default)
-            self.tracker = CSRTTracker()
+            # Create a fresh tracker instance (CSRT -> KCF -> MIL)
+            self.tracker, self.tracker_name = TrackerFactory.create_tracker()
             success = self.tracker.init(frame_small, clamped_bbox)
             
             if success:

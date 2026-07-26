@@ -10,7 +10,7 @@ rmdir /s /q dist 2>nul
 rmdir /s /q build 2>nul
 
 echo Building Development version with PyInstaller (--onedir)...
-pyinstaller --windowed --onedir --name VisionCutAI ^
+pyinstaller --clean --onedir --name VisionCutAI ^
     --add-data "models;models" ^
     --add-data "assets;assets" ^
     --hidden-import "cv2" ^

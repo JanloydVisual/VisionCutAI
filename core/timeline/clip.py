@@ -31,6 +31,15 @@ class Clip:
     effects: list = field(
         default_factory=list
     )
+    
+    keyframes: dict = field(
+        default_factory=lambda: {
+            "opacity": [],
+            "blur_amount": [],
+            "feather_amount": [],
+            "background_settings": []
+        }
+    )
 
     @property
     def frame_count(self):

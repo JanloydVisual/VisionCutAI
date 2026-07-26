@@ -4,7 +4,7 @@ import subprocess
 import json
 
 from core.asset import Asset
-from core.audio_clip import AudioClip
+from core.timeline.audio_clip import AudioClip
 
 
 class AudioImporter:

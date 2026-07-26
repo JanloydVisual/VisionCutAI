@@ -387,6 +387,16 @@ class AppController:
         if self.on_prompt_list_changed:
             self.on_prompt_list_changed()
 
+    def on_refinement_hint_selected(self, hint):
+        from core.ai.models import RefinementHintType
+        label = 0 if hint.hint_type == RefinementHintType.ADD_NEGATIVE else 1
+        prompt = {
+            'type': 'point',
+            'data': hint.position,
+            'label': label
+        }
+        self.set_target_object(prompt)
+
     def set_target_object(self, prompt: dict):
         if not self.video.is_loaded:
             return

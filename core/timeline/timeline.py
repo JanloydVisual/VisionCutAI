@@ -1,7 +1,8 @@
 from typing import List
 
-from .clip import Clip
-from .track import Track
+from core.timeline.clip import Clip
+from core.timeline.playhead import Playhead
+from core.timeline.track import Track
 
 
 class Timeline:
@@ -19,8 +20,17 @@ class Timeline:
 
         # Multi-selection support for linked clips
         self.selected_clips = []
+        self.playhead = Playhead()
 
         self.revision = 0
+
+    def get_clips_at(self, frame: int):
+        active_clips = []
+        for track in self.tracks:
+            for clip in track.clips:
+                if clip.timeline_start_frame <= frame < (clip.timeline_start_frame + clip.frame_count):
+                    active_clips.append(clip)
+        return active_clips
 
     @property
     def clips(self):
@@ -274,6 +284,25 @@ class Timeline:
         self._changed()
         return True
 
+    def duplicate_clip(self, target_clip: Clip) -> Clip:
+        import copy
+        import uuid
+        
+        new_clip = copy.copy(target_clip)
+        new_clip.timeline_start_frame = target_clip.timeline_end_frame + 1
+        
+        # Unlink id to prevent cross-contamination
+        new_clip.linked_id = None
+        if target_clip.linked_id:
+            new_clip.linked_id = str(uuid.uuid4())
+            
+        # Copy keyframes properly
+        new_clip.keyframes = copy.deepcopy(target_clip.keyframes)
+            
+        self.add_clip(new_clip)
+        self._changed()
+        return new_clip
+
     def split_clip(self, target_clip: Clip, timeline_frame: int):
         split_frame = int(timeline_frame)
         clips_to_split = [target_clip] + self.get_linked_clips(target_clip)
@@ -439,9 +468,9 @@ class Timeline:
         }
 
     def restore(self, snapshot):
-        from core.clip import Clip
-        from core.audio_clip import AudioClip
-        from core.track import Track
+        from core.timeline.clip import Clip
+        from core.timeline.audio_clip import AudioClip
+        from core.timeline.track import Track
 
         self.tracks.clear()
 

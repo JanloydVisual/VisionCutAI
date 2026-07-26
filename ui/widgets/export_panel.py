@@ -183,6 +183,22 @@ class ExportPanel(QWidget):
         """)
         layout.addWidget(self.export_btn)
 
+        # Sprint 42: DaVinci Resolve Workflow Bridge
+        self.resolve_btn = QPushButton("Export for Resolve")
+        self.resolve_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3b5998;
+                color: white;
+                font-weight: bold;
+                padding: 8px 16px;
+                border-radius: 4px;
+                margin-top: 5px;
+            }
+            QPushButton:hover { background-color: #4b69a8; }
+        """)
+        self.resolve_btn.clicked.connect(self._do_resolve_export)
+        layout.addWidget(self.resolve_btn)
+
         self.set_collapsed(True)
 
     def set_collapsed(self, collapsed: bool) -> None:
@@ -196,8 +212,13 @@ class ExportPanel(QWidget):
         # of being snapped here -- this method only owns which content is
         # shown, not how wide the pane is or how it gets there.
         self.collapsed_changed.emit(collapsed)
-
     def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def _do_resolve_export(self):
+        # Trigger the DaVinci Resolve specific export flow
+        self.format_combo.setCurrentText("PNG (Image)") # Assuming Resolve prefers Alpha PNGs
+        self._on_export_clicked()
         return self._collapsed
 
     def _create_separator(self):

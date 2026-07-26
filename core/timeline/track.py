@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
-from .clip import Clip
-from .audio_clip import AudioClip
+from core.timeline.clip import Clip
+from core.timeline.audio_clip import AudioClip
 
 
 @dataclass

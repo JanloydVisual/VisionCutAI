@@ -1,5 +1,5 @@
-from core.clip import Clip
-from core.timeline import Timeline
+from core.timeline.clip import Clip
+from core.timeline.timeline import Timeline
 
 
 def make_clip(source_start, source_end, timeline_start):

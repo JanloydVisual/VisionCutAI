@@ -2,8 +2,8 @@ from uuid import uuid4
 
 from core.video_reader import VideoReader
 from core.asset import Asset
-from core.clip import Clip
-from core.audio_clip import AudioClip
+from core.timeline.clip import Clip
+from core.timeline.audio_clip import AudioClip
 
 
 class VideoImporter:

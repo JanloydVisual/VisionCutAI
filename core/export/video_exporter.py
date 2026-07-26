@@ -71,10 +71,8 @@ class VideoExporter:
             return
 
         self.video_path = video_path
-        self._stop_event.clear()
-        self._start_time = time.time()
-        self._current_frame = 0
-        self._total_frames = 0
+    def _tracked_prompt_for(self, source_frame: int):
+        return None
         self._thread = threading.Thread(
             target=self._export_worker,
             args=(video_path, start_frame, end_frame),

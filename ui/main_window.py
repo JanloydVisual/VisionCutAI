@@ -1,4 +1,6 @@
 from PyQt6.QtWidgets import (
+    QToolBar,
+    QDockWidget, QProgressBar,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -96,103 +98,111 @@ class MainWindow(QMainWindow):
         self.autosave_timer.start(300000)  # 5 minutes
 
     def build_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        # -- Top bar (file label + browse) --
-        top_bar = QWidget()
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(8, 4, 8, 4)
+        # 1. Top Toolbar (Grouped)
+        self.toolbar = QToolBar("Main Toolbar")
+        self.toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
+        
+        # Workspace Section
+        self.toolbar.addWidget(QLabel(" Workspace: "))
         self.file_label = QLabel("No media selected")
+        self.toolbar.addWidget(self.file_label)
+        
         self.browse_button = QPushButton("Browse")
         self.browse_button.clicked.connect(self.open_media)
-
+        self.toolbar.addWidget(self.browse_button)
+        
         self.horizontal_workspace_button = QPushButton("Horizontal")
         self.vertical_workspace_button = QPushButton("Vertical")
-
-        self.horizontal_workspace_button.clicked.connect(
-            lambda: self.set_workspace_mode("horizontal")
-        )
-
-        self.vertical_workspace_button.clicked.connect(
-            lambda: self.set_workspace_mode("vertical")
-        )
-
-        top_layout.addWidget(self.file_label)
-        top_layout.addStretch()
-
-        top_layout.addWidget(QLabel("Workspace:"))
-        top_layout.addWidget(self.horizontal_workspace_button)
-        top_layout.addWidget(self.vertical_workspace_button)
-
-        top_layout.addWidget(QLabel("Preview Quality:"))
-        self.preview_quality_combo = QComboBox()
-        self.preview_quality_combo.addItems(["Full Resolution", "Half Resolution", "Quarter Resolution"])
-        self.preview_quality_combo.currentTextChanged.connect(self._on_preview_quality_changed)
-        top_layout.addWidget(self.preview_quality_combo)
+        self.horizontal_workspace_button.clicked.connect(lambda: self.set_workspace_mode("horizontal"))
+        self.vertical_workspace_button.clicked.connect(lambda: self.set_workspace_mode("vertical"))
+        self.toolbar.addWidget(self.horizontal_workspace_button)
+        self.toolbar.addWidget(self.vertical_workspace_button)
         
-        top_layout.addWidget(QLabel("AI Quality:"))
+        self.toolbar.addSeparator()
+        
+        # AI Section
+        self.toolbar.addWidget(QLabel(" AI: "))
         self.ai_quality_combo = QComboBox()
         self.ai_quality_combo.addItems(["Draft", "Balanced", "Best"])
         self.ai_quality_combo.setCurrentText("Balanced")
         self.ai_quality_combo.currentTextChanged.connect(self._on_ai_quality_changed)
-        top_layout.addWidget(self.ai_quality_combo)
-
-        # Sprint 34.2: one-click show/hide for the three workspace panels.
-        # Checkable so the button's own pressed-state always reflects
-        # whether the panel is currently open, regardless of which control
-        # (this button, or the panel's own in-place close affordance)
-        # last changed it.
-        top_layout.addWidget(QLabel("Panels:"))
-        self.export_panel_toggle_button = QPushButton("\U0001F4E4 Export")
+        self.toolbar.addWidget(self.ai_quality_combo)
+        
+        self.toolbar.addSeparator()
+        
+        # View Section
+        self.toolbar.addWidget(QLabel(" View: "))
+        self.preview_quality_combo = QComboBox()
+        self.preview_quality_combo.addItems(["Full Resolution", "Half Resolution", "Quarter Resolution"])
+        self.preview_quality_combo.currentTextChanged.connect(self._on_preview_quality_changed)
+        self.toolbar.addWidget(self.preview_quality_combo)
+        
+        self.export_panel_toggle_button = QPushButton("📤 Export")
         self.export_panel_toggle_button.setCheckable(True)
-        self.export_panel_toggle_button.setToolTip("Show/hide the export panel")
-        top_layout.addWidget(self.export_panel_toggle_button)
-
-        self.timeline_toggle_button = QPushButton("\U0001F3AC Timeline")
+        self.toolbar.addWidget(self.export_panel_toggle_button)
+        
+        self.timeline_toggle_button = QPushButton("🎬 Timeline")
         self.timeline_toggle_button.setCheckable(True)
         self.timeline_toggle_button.setChecked(True)
-        self.timeline_toggle_button.setToolTip("Expand/collapse the timeline")
-        top_layout.addWidget(self.timeline_toggle_button)
-
+        self.toolbar.addWidget(self.timeline_toggle_button)
+        
         if self.is_dev:
-            self.dev_panel_toggle_button = QPushButton("\U0001F6E0 Developer")
+            self.dev_panel_toggle_button = QPushButton("🛠 Developer")
             self.dev_panel_toggle_button.setCheckable(True)
             self.dev_panel_toggle_button.setChecked(True)
-            self.dev_panel_toggle_button.setToolTip("Show/hide the Developer Panel")
-            top_layout.addWidget(self.dev_panel_toggle_button)
-
-        top_layout.addWidget(self.browse_button)
-        layout.addWidget(top_bar)
-
+            self.toolbar.addWidget(self.dev_panel_toggle_button)
+            
         self.stage_indicator = StageIndicator()
-        layout.addWidget(self.stage_indicator)
-
-        # -- Vertical splitter: preview (top) / timeline + info (bottom) --
-        self.splitter = QSplitter(Qt.Orientation.Vertical)
-        self.splitter.setHandleWidth(8)
-        self.splitter.setChildrenCollapsible(False)
-        self.splitter.setStyleSheet(SPLITTER_STYLE)
-
-        # Top section: video player (preview + controls + scrub bar)
+        
+        # 2. Central Widget (Viewer + Stage Indicator)
         self.video_player = VideoPlayerWidget()
-        self.splitter.addWidget(self.video_player)
-
-        # Bottom section: timeline editor + status info
-        bottom_widget = QWidget()
-        bottom_layout = QVBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
-        bottom_layout.setSpacing(2)
-
+        center_widget = QWidget()
+        center_layout = QVBoxLayout(center_widget)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.addWidget(self.stage_indicator)
+        center_layout.addWidget(self.video_player, stretch=1)
+        
+        # 3. Dock Panels
+        self.setDockOptions(QMainWindow.DockOption.AllowNestedDocks | QMainWindow.DockOption.AnimatedDocks)
+        
+        # Left Dock: Prompt List Panel (Object/AI)
+        self.prompt_list_panel = PromptListPanel(self)
+        self.prompt_list_dock = QDockWidget("Objects & AI", self)
+        self.prompt_list_dock.setWidget(self.prompt_list_panel)
+        self.prompt_list_dock.setObjectName("PromptListDock")
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.prompt_list_dock)
+        self.prompt_list_dock.setVisible(False)
+        
+        # Right Dock: Export Panel
+        self.export_panel = ExportPanel(self)
+        self.export_dock = QDockWidget("Export", self)
+        self.export_dock.setWidget(self.export_panel)
+        self.export_dock.setObjectName("ExportDock")
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.export_dock)
+        self.export_panel.export_requested.connect(self._on_export_requested)
+        self.export_panel.collapsed_changed.connect(self._on_export_panel_collapsed_changed)
+        self.export_panel_toggle_button.clicked.connect(
+            lambda: self.export_dock.setVisible(not self.export_dock.isVisible()))
+            
+        # Bottom Dock: Timeline
         self.timeline_editor = TimelineEditor()
         self.timeline_editor.set_project(self.controller.project)
         self.timeline_editor.set_render_cache(self.controller.render_cache)
-        bottom_layout.addWidget(self.timeline_editor, stretch=0)
+        self.timeline_editor.collapsed_changed.connect(self._on_timeline_collapsed_changed)
+        
+        self.timeline_dock = QDockWidget("Timeline", self)
+        self.timeline_dock.setWidget(self.timeline_editor)
+        self.timeline_dock.setObjectName("TimelineDock")
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.timeline_dock)
+        self.timeline_toggle_button.clicked.connect(
+            lambda: self.timeline_dock.setVisible(not self.timeline_dock.isVisible()))
 
-        # True Status Bar
+        # Status Bar
         self.status = self.statusBar()
-        self.status.setStyleSheet("QStatusBar { background-color: #2b2b2b; color: #d4d4d4; font-size: 11px; }")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.status.addPermanentWidget(self.progress_bar)
         
         self.lbl_proj = QLabel("Project: Ready")
         self.lbl_video = QLabel("Video: None")
@@ -203,89 +213,40 @@ class MainWindow(QMainWindow):
         self.lbl_ram = QLabel("RAM: -")
         
         for lbl in (self.lbl_proj, self.lbl_video, self.ai_status_label, self.tracking_status_label, self.lbl_gpu, self.lbl_vram, self.lbl_ram):
-            lbl.setStyleSheet("padding: 0 10px; border-right: 1px solid #444;")
             self.status.addWidget(lbl)
             
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._update_status_bar)
         self.status_timer.start(1000)
 
-        self.splitter.addWidget(bottom_widget)
-
-        # Sprint 34.1: viewer-first -- the preview gets ~70% of the
-        # vertical splitter, timeline the rest. setStretchFactor only
-        # governs how *extra* space is redistributed on resize; the actual
-        # initial split comes from set_workspace_mode()'s setSizes() calls
-        # below, kept in the same ~70/30 ratio.
-        self.splitter.setStretchFactor(0, 70)
-        self.splitter.setStretchFactor(1, 30)
-
-        self.export_panel = ExportPanel(self)
-        self.export_panel.export_requested.connect(self._on_export_requested)
-        self.export_panel.collapsed_changed.connect(self._on_export_panel_collapsed_changed)
-        self.timeline_editor.collapsed_changed.connect(self._on_timeline_collapsed_changed)
-
-        self.export_panel_toggle_button.clicked.connect(
-            lambda: self.export_panel.set_collapsed(not self.export_panel.is_collapsed()))
-        self.timeline_toggle_button.clicked.connect(
-            lambda: self.timeline_editor.set_collapsed(not self.timeline_editor.is_collapsed()))
-
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.main_splitter.setHandleWidth(8)
-        self.main_splitter.setStyleSheet(SPLITTER_STYLE)
-        self.main_splitter.addWidget(self.splitter)
-        self.main_splitter.addWidget(self.export_panel)
-        # Export panel starts collapsed (ExportPanel.__init__ already calls
-        # set_collapsed(True)) -- give essentially all width to the
-        # viewer/timeline side; the panel's own fixed collapsed width
-        # governs its actual size regardless of the split number here.
-        self.main_splitter.setSizes([1160, EXPORT_PANEL_COLLAPSED_WIDTH])
-
-        layout.addWidget(self.main_splitter, stretch=1)
-
-        # Sprint 36: Prompt List panel -- docked, hidden until the user is
-        # actually in Select Target mode (nothing to show otherwise), same
-        # scoping as the row-2 Keep(+)/Remove(-)/Undo/Clear controls.
-        self.prompt_list_panel = PromptListPanel(self)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.prompt_list_panel)
-        self.prompt_list_panel.setVisible(False)
-
-        container = QWidget()
-        container.setLayout(layout)
-        
+        # Welcome Screen and Stack
         self.welcome_screen = WelcomeScreen()
         self.welcome_screen.open_project_requested.connect(self.open_media)
         self.welcome_screen.import_video_requested.connect(self.open_media)
         
         self.main_stack = QStackedWidget()
         self.main_stack.addWidget(self.welcome_screen)
-        self.main_stack.addWidget(container)
+        self.main_stack.addWidget(center_widget)
         
         self.setCentralWidget(self.main_stack)
-        self.main_stack.setCurrentIndex(0)
         
-        if self.is_dev:
-            self.dev_panel = DeveloperPanel(self.controller, self)
-            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dev_panel)
+        # Load Workspace Persistence
+        self.load_workspace_layout()
 
-            # Sprint 32B: Developer Debug Overlay toggles.
-            self.dev_panel.chk_debug_points.toggled.connect(
-                lambda v: self.video_player.set_debug_layer_visible("points", v))
-            self.dev_panel.chk_debug_raw_mask.toggled.connect(
-                lambda v: self.video_player.set_debug_layer_visible("raw_mask", v))
-            self.dev_panel.chk_debug_cleaned_mask.toggled.connect(
-                lambda v: self.video_player.set_debug_layer_visible("cleaned_mask", v))
-            self.dev_panel.chk_debug_final_overlay.toggled.connect(
-                lambda v: self.video_player.set_debug_layer_visible("final_overlay", v))
-            self.controller.on_debug_prompt_points_updated = self.video_player.set_debug_prompt_points
+    def load_workspace_layout(self):
+        settings = QSettings("VisionCutAI", "Workspace")
+        geometry = settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        state = settings.value("windowState")
+        if state:
+            self.restoreState(state)
 
-            self.dev_panel_toggle_button.clicked.connect(self._on_dev_panel_toggle_clicked)
-            self.dev_panel.visibilityChanged.connect(self._on_dev_panel_visibility_changed)
-
-        # Sprint 34.2: restore each panel's last state now that every
-        # widget involved has been constructed and wired -- before show(),
-        # so there's no visible flash of the construction-time default.
-        self._restore_panel_states()
+    def closeEvent(self, event):
+        settings = QSettings("VisionCutAI", "Workspace")
+        settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("windowState", self.saveState())
+        super().closeEvent(event)
 
     def _on_preview_quality_changed(self, text: str):
         if text == "Full Resolution":
@@ -420,54 +381,15 @@ class MainWindow(QMainWindow):
         self.lbl_ram.setText(f"RAM: {mem.used / (1024*1024*1024):.1f} GB")
 
     def set_workspace_mode(self, mode: str):
-        # Sprint 34.1: viewer-first -- the video gets ~70% of the split in
-        # both orientations. In "vertical" mode (side-by-side), the viewer
-        # already spans the window's full height by construction, which is
-        # what actually maximizes portrait video -- the 70/30 width split
-        # here just keeps that mode consistent with "horizontal"'s ratio.
+        if not hasattr(self, 'timeline_dock'): return
         if mode == "vertical":
-            # Timeline left, Video right
-            self.splitter.setOrientation(Qt.Orientation.Horizontal)
-
-            self.splitter.insertWidget(0, self.timeline_editor.parent())
-            self.splitter.insertWidget(1, self.video_player)
-
-            # setStretchFactor is index-bound, not widget-bound -- since
-            # insertWidget above put the timeline at index 0 and the video
-            # at index 1 (the reverse of "horizontal" mode's order), the
-            # factors must be set to match this specific order too, or a
-            # later relayout/resize silently re-favors the timeline instead
-            # of the viewer (the bug this comment is here to prevent
-            # regressing back to).
-            self.splitter.setStretchFactor(0, 30)
-            self.splitter.setStretchFactor(1, 70)
-            self.splitter.setSizes([390, 910])
-            self.video_player.fit_to_window()
+            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.timeline_dock)
             self.workspace_mode = "vertical"
-
         else:
-            # Video top, Timeline (now compact) bottom
-            self.splitter.setOrientation(Qt.Orientation.Vertical)
-
-            self.splitter.insertWidget(0, self.video_player)
-            self.splitter.insertWidget(1, self.timeline_editor.parent())
-
-            self.splitter.setStretchFactor(0, 70)
-            self.splitter.setStretchFactor(1, 30)
-            self.splitter.setSizes([700, 300])
-            self.video_player.fit_to_window()
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.timeline_dock)
             self.workspace_mode = "horizontal"
-
         self.settings.setValue("workspace_mode", self.workspace_mode)
-
-        # Sprint 34.2: the sizes set above assume an expanded timeline --
-        # if it's currently collapsed, re-apply that collapsed sizing on
-        # top of the new orientation, or switching workspace mode would
-        # silently regrow the pane to full size while its content
-        # (toolbar_container/body_container) stays hidden, leaving a
-        # blank gap instead of either a real collapse or a real timeline.
-        if hasattr(self, 'timeline_editor') and self.timeline_editor.is_collapsed():
-            self._on_timeline_collapsed_changed(True)
+        self.video_player.fit_to_window()
 
     def connect_signals(self):
         self.video_player.play_clicked.connect(self.controller.play)
@@ -763,6 +685,23 @@ class MainWindow(QMainWindow):
 
         self._update_ai_status_ui()
         self.export_panel.format_combo.setCurrentText("MOV Alpha")
+        self._apply_workspace_proportions()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_workspace_proportions()
+
+    def _apply_workspace_proportions(self):
+        if not hasattr(self, 'timeline_dock'):
+            return
+            
+        h = self.height()
+        if not self.controller.video.is_loaded:
+            # EMPTY: Viewer 85% Timeline 15%
+            self.resizeDocks([self.timeline_dock], [int(h * 0.15)], Qt.Orientation.Vertical)
+        else:
+            # MEDIA: Viewer 70% Timeline 30%
+            self.resizeDocks([self.timeline_dock], [int(h * 0.30)], Qt.Orientation.Vertical)
 
     def _update_ai_status_ui(self):
         if self.controller.is_background_removal_active:

@@ -1,5 +1,5 @@
-from .timeline import Timeline
-from .asset_manager import AssetManager
+from ..timeline.timeline import Timeline
+from ..asset_manager import AssetManager
 
 class Project:
 
